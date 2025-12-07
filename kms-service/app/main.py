@@ -33,9 +33,18 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="KMS Service")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # --- In-memory stores ------------------------------------------------------
@@ -136,7 +145,18 @@ def health() -> dict:
 
 @app.post("/v1/customers/{customer_id}/root-keys", response_model=CreateCRKResponse)
 def create_root_key(customer_id: str) -> CreateCRKResponse:
-    # Route: create/rotate CRK for customer_id; wraps CRK with MK (AES-GCM) and stores in-memory.
+    # Route: get-or-create CRK for customer_id; reuses existing active CRK, otherwise creates and wraps with MK.
+    existing_ids = CRK_VERSIONS.get(customer_id, [])
+    if existing_ids:
+        existing = CRK_STORE[existing_ids[-1]]
+        return CreateCRKResponse(
+            crk_id=existing.crk_id,
+            customer_id=existing.customer_id,
+            version=existing.version,
+            status=existing.status,
+            algorithm=existing.algorithm,
+        )
+
     mk = derive_master_key()
     crk_bytes = secrets.token_bytes(32)
     wrapped_crk = aes_gcm_encrypt(mk, crk_bytes)

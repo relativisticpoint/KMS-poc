@@ -55,6 +55,18 @@ def test_generate_and_unwrap_dek_flow():
     assert unwrap_resp.json()["plaintext_dek"] == gen_body["plaintext_dek"]
 
 
+def test_create_root_key_reuses_existing_crk():
+    client = TestClient(kms.app)
+
+    first = client.post("/v1/customers/cust-3/root-keys")
+    second = client.post("/v1/customers/cust-3/root-keys")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["crk_id"] == second.json()["crk_id"]
+    assert first.json()["version"] == second.json()["version"] == 1
+
+
 def test_unwrap_with_tampered_payload_returns_400():
     client = TestClient(kms.app)
     crk_resp = client.post("/v1/customers/cust-2/root-keys")

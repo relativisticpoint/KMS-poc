@@ -33,12 +33,21 @@ from typing import Dict, Optional
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 KMS_BASE_URL = os.getenv("KMS_BASE_URL", "http://kms-service:8000")
 
 app = FastAPI(title="Data Service")
 kms_client = httpx.Client(base_url=KMS_BASE_URL, timeout=5.0)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # --- In-memory store ------------------------------------------------------
