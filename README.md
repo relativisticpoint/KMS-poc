@@ -10,8 +10,8 @@ and a data service that uses envelope encryption.
 - PostgreSQL database (port 5432)
 
 Current state:
-- KMS exposes in-memory endpoints to create/rotate CRKs and generate/unwrap DEKs using mock wrapping.
-- Data service calls KMS, mock-encrypts data, and stores records in memory (no Postgres usage yet).
+- KMS exposes in-memory endpoints to create/rotate CRKs and generate/unwrap DEKs using AES-GCM wrapping (real crypto), still stored in memory.
+- Data service calls KMS, AES-GCM encrypts/decrypts data, and stores records in memory (no Postgres usage yet).
 
 ## Running
 

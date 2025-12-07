@@ -7,9 +7,9 @@ The goal is to simulate a realistic cloud KMS setup with a clean separation of
 concerns between **key management** and **data storage / encryption**.
 
 Current implementation status:
-- KMS FastAPI implements in-memory CRK create/rotate and DEK generate/unwrap endpoints with mock wrapping (no Postgres yet).
-- Data service FastAPI calls KMS, performs mock data encryption/decryption, and stores records in memory (no Postgres yet).
-- Crypto is intentionally mocked for shape validation; `cryptography`-backed AES-GCM to be added later.
+- KMS FastAPI implements in-memory CRK create/rotate and DEK generate/unwrap endpoints using AES-GCM wrapping (real crypto; no Postgres yet).
+- Data service FastAPI calls KMS, performs AES-GCM data encryption/decryption, and stores records in memory (no Postgres yet).
+- Real crypto is in place; persistence and rotation logic remain to be added.
 
 ## Big Picture
 
@@ -31,7 +31,7 @@ There are 3 main services:
    - Does NOT manage long-term key material itself.
    - For each piece of data:
      - Requests a DEK from the KMS.
-     - Encrypts data locally with that DEK (currently mocked; later AES-GCM).
+     - Encrypts data locally with that DEK using AES-GCM.
      - Stores ciphertext + wrapped DEK + metadata (currently in-memory; later Postgres).
 
 3. **Database (PostgreSQL, port 5432)**
@@ -123,7 +123,7 @@ In `data-service`, we plan endpoints like:
    - Purpose: store a new piece of customer data.
    - Flow:
      - Call KMS `/v1/deks:generate` to get `{ plaintext_dek, wrapped_dek }`.
-     - Encrypt data locally with `plaintext_dek` (currently mocked; later AES-GCM).
+     - Encrypt data locally with `plaintext_dek` using AES-GCM.
        - Generate a random nonce/IV.
        - Compute ciphertext + auth tag.
      - Store in DB (currently in-memory dict; later Postgres):
@@ -150,11 +150,10 @@ In `data-service`, we plan endpoints like:
    - Health endpoints at `/health` for both services.
 
 2. **Basic in-memory KMS logic (done):**
-   - CRK and DEK endpoints in KMS with in-memory storage and mock wrapping.
-   - Data endpoints call KMS, mock-encrypt, and store data in memory.
+   - CRK and DEK endpoints in KMS with in-memory storage and AES-GCM wrapping.
+   - Data endpoints call KMS, AES-GCM encrypt/decrypt, and store data in memory.
 
-3. **Real crypto + DB:**
-   - Add cryptographic operations using `cryptography` (AES-GCM).
+3. **Persistence (next):**
    - Add SQLAlchemy models for:
      - CRKs
      - Encrypted data objects, including wrapped DEKs

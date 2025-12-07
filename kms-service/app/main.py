@@ -24,12 +24,14 @@ Planned endpoints:
 """
 
 import base64
-import hashlib
 import os
 import secrets
 import uuid
 from typing import Dict, List, Optional
 
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -92,27 +94,36 @@ class UnwrapDEKResponse(BaseModel):
     plaintext_dek: str
 
 
-# --- Mock crypto helpers --------------------------------------------------
+# --- Crypto helpers (AES-GCM) ---------------------------------------------
 
 def derive_master_key() -> bytes:
-    # Derive deterministic mock MK from env passphrase for wrapping CRKs; no params.
-    passphrase = os.getenv("MASTER_KEY_PASSPHRASE", "dev-master-pass")
-    return hashlib.sha256(passphrase.encode("utf-8")).digest()
+    # Derive MK from env passphrase using PBKDF2 for AES-256-GCM wrapping of CRKs.
+    passphrase = os.getenv("MASTER_KEY_PASSPHRASE", "dev-master-pass").encode("utf-8")
+    salt = b"kms101-mk-salt"
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=200_000,
+    )
+    return kdf.derive(passphrase)
 
 
-def mock_wrap(plaintext: bytes, wrapping_key: bytes) -> str:
-    # Mock wrap: encodes plaintext under wrapping_key prefix; returns base64 string.
-    payload = b"wrap:" + wrapping_key[:4] + b":" + plaintext
+def aes_gcm_encrypt(key: bytes, plaintext: bytes) -> str:
+    # Encrypts plaintext with AES-GCM; returns base64-encoded nonce+ciphertext+tag.
+    aesgcm = AESGCM(key)
+    nonce = secrets.token_bytes(12)
+    ct = aesgcm.encrypt(nonce, plaintext, None)
+    payload = nonce + ct
     return base64.b64encode(payload).decode("utf-8")
 
 
-def mock_unwrap(wrapped: str, wrapping_key: bytes) -> bytes:
-    # Mock unwrap: decodes wrapped base64 string and validates wrapping_key prefix.
-    decoded = base64.b64decode(wrapped.encode("utf-8"))
-    prefix = b"wrap:" + wrapping_key[:4] + b":"
-    if not decoded.startswith(prefix):
-        raise ValueError("Invalid wrapping key or corrupted payload")
-    return decoded[len(prefix) :]
+def aes_gcm_decrypt(key: bytes, wrapped: str) -> bytes:
+    # Decrypts base64-encoded nonce+ciphertext+tag; returns plaintext or raises.
+    payload = base64.b64decode(wrapped.encode("utf-8"))
+    nonce, ciphertext = payload[:12], payload[12:]
+    aesgcm = AESGCM(key)
+    return aesgcm.decrypt(nonce, ciphertext, None)
 
 
 # --- Routes ---------------------------------------------------------------
@@ -125,10 +136,10 @@ def health() -> dict:
 
 @app.post("/v1/customers/{customer_id}/root-keys", response_model=CreateCRKResponse)
 def create_root_key(customer_id: str) -> CreateCRKResponse:
-    # Route: create/rotate CRK for customer_id; wraps CRK with MK and stores in-memory.
+    # Route: create/rotate CRK for customer_id; wraps CRK with MK (AES-GCM) and stores in-memory.
     mk = derive_master_key()
     crk_bytes = secrets.token_bytes(32)
-    wrapped_crk = mock_wrap(crk_bytes, mk)
+    wrapped_crk = aes_gcm_encrypt(mk, crk_bytes)
 
     version = len(CRK_VERSIONS.get(customer_id, [])) + 1
     crk_id = str(uuid.uuid4())
@@ -167,12 +178,12 @@ def generate_dek(payload: GenerateDEKRequest) -> GenerateDEKResponse:
     record = _load_crk(payload.crk_id)
     mk = derive_master_key()
     try:
-        crk_bytes = mock_unwrap(record.wrapped_crk, mk)
-    except ValueError:
+        crk_bytes = aes_gcm_decrypt(mk, record.wrapped_crk)
+    except Exception:
         raise HTTPException(status_code=400, detail="Failed to decrypt CRK with MK")
 
     dek_bytes = secrets.token_bytes(32)
-    wrapped_dek = mock_wrap(dek_bytes, crk_bytes)
+    wrapped_dek = aes_gcm_encrypt(crk_bytes, dek_bytes)
     plaintext_dek_b64 = base64.b64encode(dek_bytes).decode("utf-8")
 
     wrapped = WrappedDEK(
@@ -190,13 +201,20 @@ def unwrap_dek(payload: UnwrapDEKRequest) -> UnwrapDEKResponse:
     record = _load_crk(payload.wrapped_dek.crk_id)
     mk = derive_master_key()
     try:
-        crk_bytes = mock_unwrap(record.wrapped_crk, mk)
-    except ValueError:
+        crk_bytes = aes_gcm_decrypt(mk, record.wrapped_crk)
+    except Exception:
         raise HTTPException(status_code=400, detail="Failed to decrypt CRK with MK")
 
     try:
-        dek_bytes = mock_unwrap(payload.wrapped_dek.wrapped_key, crk_bytes)
-    except ValueError:
+        dek_bytes = aes_gcm_decrypt(crk_bytes, payload.wrapped_dek.wrapped_key)
+    except Exception:
         raise HTTPException(status_code=400, detail="Failed to unwrap DEK with CRK")
 
     return UnwrapDEKResponse(plaintext_dek=base64.b64encode(dek_bytes).decode("utf-8"))
+
+
+# DEBUG ONLY: remove before production; dumps in-memory CRK store
+@app.get("/_debug/crks")
+def debug_dump_crks() -> dict:
+    # Route: returns raw CRK_STORE including wrapped CRKs for troubleshooting; not for production use.
+    return {crk_id: record.dict() for crk_id, record in CRK_STORE.items()}
