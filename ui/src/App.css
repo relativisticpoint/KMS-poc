@@ -1,0 +1,126 @@
+.app-shell {
+  min-height: 100vh;
+  background: radial-gradient(180% 140% at 20% 20%, #f8fafc, #e2e8f0);
+  color: #0f172a;
+  padding: 32px 16px 48px;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+}
+
+.hero {
+  max-width: 720px;
+  margin: 0 auto 24px;
+  text-align: center;
+}
+
+.hero h1 {
+  margin-bottom: 8px;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.hero p {
+  margin: 0;
+  color: #334155;
+  line-height: 1.5;
+}
+
+.panel {
+  max-width: 960px;
+  margin: 0 auto 16px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.1);
+  backdrop-filter: blur(6px);
+}
+
+.panel-header .eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 12px;
+  color: #0ea5e9;
+  margin: 0 0 6px;
+  font-weight: 700;
+}
+
+.panel-header h2 {
+  margin: 0 0 10px;
+  font-size: 20px;
+}
+
+.form-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+input {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 14px;
+  color: #0f172a;
+  background: #fff;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+button {
+  border: none;
+  background: #0ea5e9;
+  color: white;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(14, 165, 233, 0.3);
+}
+
+button.ghost {
+  background: #e2e8f0;
+  color: #0f172a;
+  box-shadow: none;
+}
+
+.status {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.state-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.state-grid h4 {
+  margin: 0 0 6px;
+}
+
+.state-block {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 10px;
+  border-radius: 10px;
+  min-height: 200px;
+  overflow: auto;
+}

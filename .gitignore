@@ -29,3 +29,7 @@ htmlcov/
 
 # Misc
 *.sqlite3
+
+# Frontend
+ui/node_modules/
+ui/dist/
