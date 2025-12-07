@@ -31,6 +31,7 @@ import uuid
 from typing import Dict, Optional
 
 import httpx
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -72,29 +73,28 @@ class RetrieveDataResponse(BaseModel):
     data: str
 
 
-# --- Mock crypto helpers (mirrors KMS mock) -------------------------------
+# --- Crypto helpers (AES-GCM) ---------------------------------------------
 
-def mock_encrypt(plaintext: bytes, dek: bytes) -> tuple[str, str, str]:
-    # Mock AEAD encrypt: given plaintext bytes and dek, returns (ciphertext, nonce, tag) as base64 strings.
+def encrypt_data(plaintext: bytes, dek: bytes) -> tuple[str, str, str]:
+    # AES-GCM encrypt: given plaintext bytes and dek, returns (ciphertext, nonce, tag) as base64 strings.
+    aesgcm = AESGCM(dek)
     nonce = secrets.token_bytes(12)
-    payload = b"enc:" + dek[:4] + b":" + nonce + b":" + plaintext
-    ciphertext = base64.b64encode(payload).decode("utf-8")
-    tag = base64.b64encode(secrets.token_bytes(16)).decode("utf-8")
+    ct_with_tag = aesgcm.encrypt(nonce, plaintext, None)
+    ciphertext, tag = ct_with_tag[:-16], ct_with_tag[-16:]
     return (
-        ciphertext,
+        base64.b64encode(ciphertext).decode("utf-8"),
         base64.b64encode(nonce).decode("utf-8"),
-        tag,
+        base64.b64encode(tag).decode("utf-8"),
     )
 
 
-def mock_decrypt(ciphertext_b64: str, nonce_b64: str, dek: bytes) -> bytes:
-    # Mock AEAD decrypt: validates dek/nonce prefix against ciphertext and returns plaintext bytes.
+def decrypt_data(ciphertext_b64: str, nonce_b64: str, tag_b64: str, dek: bytes) -> bytes:
+    # AES-GCM decrypt: recombines ciphertext and tag and returns plaintext bytes.
     nonce = base64.b64decode(nonce_b64.encode("utf-8"))
-    decoded = base64.b64decode(ciphertext_b64.encode("utf-8"))
-    prefix = b"enc:" + dek[:4] + b":" + nonce + b":"
-    if not decoded.startswith(prefix):
-        raise ValueError("Invalid key or nonce")
-    return decoded[len(prefix) :]
+    ciphertext = base64.b64decode(ciphertext_b64.encode("utf-8"))
+    tag = base64.b64decode(tag_b64.encode("utf-8"))
+    aesgcm = AESGCM(dek)
+    return aesgcm.decrypt(nonce, ciphertext + tag, None)
 
 
 # --- Helpers --------------------------------------------------------------
@@ -144,11 +144,11 @@ def health() -> dict:
 
 @app.post("/data", response_model=StoreDataResponse)
 def store_data(payload: StoreDataRequest) -> StoreDataResponse:
-    # Route: accepts StoreDataRequest with customer_id/data/crk_id; ensures CRK, gets DEK from KMS, mock-encrypts data, stores in-memory, returns data_id.
+    # Route: accepts StoreDataRequest with customer_id/data/crk_id; ensures CRK, gets DEK from KMS, AES-GCM encrypts data, stores in-memory, returns data_id.
     crk_id = _ensure_crk(payload.customer_id, payload.crk_id)
     dek_bytes, wrapped_dek = _generate_dek(payload.customer_id, crk_id)
 
-    ciphertext, nonce, tag = mock_encrypt(payload.data.encode("utf-8"), dek_bytes)
+    ciphertext, nonce, tag = encrypt_data(payload.data.encode("utf-8"), dek_bytes)
 
     data_id = str(uuid.uuid4())
     record = StoredData(
@@ -165,15 +165,15 @@ def store_data(payload: StoreDataRequest) -> StoreDataResponse:
 
 @app.get("/data/{data_id}", response_model=RetrieveDataResponse)
 def retrieve_data(data_id: str) -> RetrieveDataResponse:
-    # Route: fetches record by data_id, unwraps DEK via KMS, mock-decrypts ciphertext, returns plaintext response.
+    # Route: fetches record by data_id, unwraps DEK via KMS, AES-GCM decrypts ciphertext, returns plaintext response.
     record = DATA_STORE.get(data_id)
     if not record:
         raise HTTPException(status_code=404, detail="Data not found")
 
     dek_bytes = _unwrap_dek(record.wrapped_dek)
     try:
-        plaintext = mock_decrypt(record.ciphertext, record.nonce, dek_bytes)
-    except ValueError:
+        plaintext = decrypt_data(record.ciphertext, record.nonce, record.tag, dek_bytes)
+    except Exception:
         raise HTTPException(status_code=400, detail="Failed to decrypt data")
 
     return RetrieveDataResponse(
@@ -181,7 +181,7 @@ def retrieve_data(data_id: str) -> RetrieveDataResponse:
     )
 
 
-# DEBUG ONLY: remove before production; dumps raw in-memory store
+#! DEBUG ONLY: remove before production; dumps raw in-memory store
 @app.get("/_debug/data")
 def debug_dump_data_store() -> dict:
     # Route: returns raw DATA_STORE dict for troubleshooting; not for production use.
