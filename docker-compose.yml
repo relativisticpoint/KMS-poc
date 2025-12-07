@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  kms-service:
+    build: ./kms-service
+    container_name: kms-service
+    ports:
+      - "8000:8000"
+    environment:
+      - MASTER_KEY_PASSPHRASE=dev-master-pass
+    networks:
+      - backend
+
+  data-service:
+    build: ./data-service
+    container_name: data-service
+    ports:
+      - "8001:8001"
+    environment:
+      - KMS_BASE_URL=http://kms-service:8000
+    depends_on:
+      - kms-service
+      - db
+    networks:
+      - backend
+
+  db:
+    image: postgres:16
+    container_name: kms-db
+    environment:
+      - POSTGRES_USER=kms
+      - POSTGRES_PASSWORD=kms
+      - POSTGRES_DB=kms_poc
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - backend
+
+networks:
+  backend:
+
+volumes:
+  db_data:
