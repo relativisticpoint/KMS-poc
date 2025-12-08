@@ -14,7 +14,7 @@
 
 .hero h1 {
   margin-bottom: 8px;
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 700;
 }
 
@@ -124,12 +124,13 @@ textarea {
 
 .link-button {
   background: none;
-  border: none;
+  border: 1px dashed #0ea5e9;
   color: #0ea5e9;
   font-weight: 700;
   cursor: pointer;
-  padding: 0;
+  padding: 8px 10px;
   text-align: left;
+  border-radius: 8px;
 }
 
 .advanced-grid {

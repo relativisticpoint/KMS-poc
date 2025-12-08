@@ -100,19 +100,8 @@ const App = () => {
   return (
     <main className="app-shell">
       <header className="hero">
-        <h1>KMS101 – Envelope Encryption</h1>
-        <p>
-          An interactive demonstration of how envelope encryption works. Data is encrypted with a
-          Data Encryption Key (DEK), which is then encrypted with a Customer Root Key (CRK) from the
-          KMS before storage.
-        </p>
-        <div className="steps">
-          <span className="pill step data">1) Store data</span>
-          <span className="pill step kms">2) KMS generates DEK</span>
-          <span className="pill step db">3) DB stores ciphertext</span>
-          <span className="pill step kms">4) KMS unwraps DEK</span>
-          <span className="pill step data">5) Data service decrypts</span>
-        </div>
+        <h1>KMS Playground</h1>
+        <p>An interactive demonstration of how envelope encryption for a KMS service works.</p>
       </header>
 
       <div className="cards-grid">
@@ -144,11 +133,7 @@ const App = () => {
               />
             </label>
             <div className="accordion">
-              <button
-                type="button"
-                className="link-button"
-                onClick={() => setAdvancedOpen((o) => !o)}
-              >
+              <button type="button" className="link-button fancy" onClick={() => setAdvancedOpen((o) => !o)}>
                 {advancedOpen ? "Hide advanced (URLs)" : "Show advanced (URLs)"}
               </button>
               {advancedOpen && (
@@ -202,16 +187,11 @@ const App = () => {
               Refresh debug state
             </button>
           </div>
-          {(latestId || status) && (
+          {status && (
             <div className="small-debug">
-              {latestId && (
-                <div>
-                  <strong>Latest data_id:</strong> {latestId}
-                </div>
-              )}
               {status && (
                 <div className="status">
-                  <strong>Last result:</strong> {status}
+                  <strong>Decrypted data:</strong> {status}
                 </div>
               )}
             </div>
