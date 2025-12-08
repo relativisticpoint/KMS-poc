@@ -9,6 +9,12 @@ and a data service that uses envelope encryption.
 - Data Service (FastAPI, port 8001)
 - PostgreSQL databases (separate instances for KMS CRKs and data records)
 
+### Databases (schemas)
+- `kms-data-db` (`kms_poc_data`):
+  - `data_records`: `data_id` (PK), `customer_id`, `ciphertext`, `nonce`, `tag`, `wrapped_dek` (JSON with CRK metadata and wrapped key).
+- `kms-db` (`kms_poc_kms`):
+  - `crks`: `crk_id` (PK), `customer_id`, `version`, `status`, `algorithm`, `wrapped_crk` (CRK encrypted under MK).
+
 Current state:
 - KMS persists CRKs in its own Postgres instance, exposing endpoints to create/rotate CRKs and generate/unwrap DEKs using AES-GCM wrapping (real crypto). Per-customer CRK reuse (get-or-create) is enforced server-side.
 - Data service calls KMS, AES-GCM encrypts/decrypts data, and persists encrypted records in Postgres.

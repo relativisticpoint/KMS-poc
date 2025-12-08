@@ -41,6 +41,12 @@ There are 3 main services:
      - Wrapped DEKs and key metadata
    - KMS uses its own Postgres instance to store CRK metadata and wrapped CRKs.
 
+### Database schemas
+- `kms-data-db` (`kms_poc_data`):
+  - `data_records`: `data_id` (PK), `customer_id`, `ciphertext`, `nonce`, `tag`, `wrapped_dek` (JSON: crk_id, crk_version, algorithm, wrapped_key).
+- `kms-db` (`kms_poc_kms`):
+  - `crks`: `crk_id` (PK), `customer_id`, `version`, `status`, `algorithm`, `wrapped_crk` (CRK encrypted under MK).
+
 Communication:
 
 - `data-service` ⇄ `kms-service` over HTTP inside docker-compose network
