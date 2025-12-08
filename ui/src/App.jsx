@@ -89,65 +89,107 @@ const App = () => {
         </p>
       </header>
 
-      <section className="panel">
-        <div className="panel-header">
-          <p className="eyebrow">Try it live</p>
-          <h2>Store and decrypt data</h2>
-        </div>
-        <div className="form-grid">
-          <label>
-            Customer ID
-            <input value={customerId} onChange={(e) => setCustomerId(e.target.value)} />
-          </label>
-          <label>
-            Plaintext
-            <input value={plaintext} onChange={(e) => setPlaintext(e.target.value)} />
-          </label>
-          <label>
-            CRK ID (optional)
-            <input
-              value={crkId}
-              onChange={(e) => setCrkId(e.target.value)}
-              placeholder="auto-create if empty"
-            />
-          </label>
-          <label>
-            Data service URL
-            <input value={dataBaseUrl} onChange={(e) => setDataBaseUrl(e.target.value)} />
-          </label>
-          <label>
-            KMS service URL
-            <input value={kmsBaseUrl} onChange={(e) => setKmsBaseUrl(e.target.value)} />
-          </label>
-        </div>
-        <div className="actions">
-          <button onClick={handleEncrypt}>Store data (POST /data)</button>
-          <button onClick={handleDecrypt} className="ghost">
-            Decrypt latest (GET /data/&lt;id&gt;)
-          </button>
-          <button onClick={fetchStores} className="ghost">
-            Refresh debug state
-          </button>
-        </div>
-        {status && <div className="status">{status}</div>}
-      </section>
+      <div className="cards-grid">
+        <section className="card">
+          <div className="card-header">
+            <p className="eyebrow">Application</p>
+            <h2>Data service</h2>
+          </div>
+          <div className="form-grid">
+            <label>
+              Customer ID
+              <input value={customerId} onChange={(e) => setCustomerId(e.target.value)} />
+            </label>
+            <label>
+              Plaintext
+              <textarea
+                value={plaintext}
+                onChange={(e) => setPlaintext(e.target.value)}
+                rows={2}
+              />
+            </label>
+            <label>
+              CRK ID (optional)
+              <input
+                value={crkId}
+                onChange={(e) => setCrkId(e.target.value)}
+                placeholder="auto-create if empty"
+              />
+            </label>
+            <label>
+              Data service URL
+              <input value={dataBaseUrl} onChange={(e) => setDataBaseUrl(e.target.value)} />
+            </label>
+            <label>
+              KMS service URL
+              <input value={kmsBaseUrl} onChange={(e) => setKmsBaseUrl(e.target.value)} />
+            </label>
+          </div>
+          <div className="actions">
+            <button onClick={handleEncrypt}>Store data (POST /data)</button>
+            <button onClick={handleDecrypt} className="ghost">
+              Decrypt latest (GET /data/&lt;id&gt;)
+            </button>
+            <button onClick={fetchStores} className="ghost">
+              Refresh debug state
+            </button>
+          </div>
+          <div className="small-debug">
+            <div>
+              <strong>Latest data_id:</strong> {latestId || "none yet"}
+            </div>
+            {status && <div className="status">{status}</div>}
+          </div>
+          <div className="card-footer">
+            <h4>What the data service does</h4>
+            <p>
+              This card simulates the application / data service. When you click <em>Store data</em>,
+              it calls POST <code>/data</code>. The data service then calls the KMS to get a Data
+              Encryption Key (DEK), encrypts your plaintext with the DEK, and stores only ciphertext
+              + a wrapped DEK in the database.
+            </p>
+          </div>
+        </section>
 
-      <section className="panel">
-        <div className="panel-header">
-          <p className="eyebrow">Current state</p>
-          <h2>Debug stores (in-memory)</h2>
-        </div>
-        <div className="state-grid">
-          <div>
-            <h4>KMS CRKs</h4>
-            <pre className="state-block">{JSON.stringify(crkStore, null, 2)}</pre>
+        <section className="card">
+          <div className="card-header">
+            <p className="eyebrow">Keys</p>
+            <h2>KMS</h2>
           </div>
-          <div>
-            <h4>Data store</h4>
-            <pre className="state-block">{JSON.stringify(dataStore, null, 2)}</pre>
+          <div className="state-block">
+            <p className="subtitle">KMS CRKs (in-memory debug view)</p>
+            <pre>{JSON.stringify(crkStore, null, 2)}</pre>
           </div>
-        </div>
-      </section>
+          <div className="card-footer">
+            <h4>What the KMS does</h4>
+            <p>
+              The KMS owns the master key and customer root keys (CRKs). For encryption it generates
+              a DEK and wraps it with a CRK via <code>POST /v1/deks:generate</code>. For decryption
+              it unwraps the DEK via <code>POST /v1/deks:unwrap</code>. It never stores plaintext
+              data—only key material and crypto operations.
+            </p>
+          </div>
+        </section>
+
+        <section className="card">
+          <div className="card-header">
+            <p className="eyebrow">Storage</p>
+            <h2>Database</h2>
+          </div>
+          <div className="state-block">
+            <p className="subtitle">Data store (encrypted objects)</p>
+            <pre>{JSON.stringify(dataStore, null, 2)}</pre>
+          </div>
+          <div className="card-footer">
+            <h4>What the database stores</h4>
+            <p>
+              The database holds only encrypted data and wrapped DEKs. It does not have the master
+              key or CRKs, so it cannot decrypt by itself. Each record contains ciphertext, AEAD
+              metadata (nonce/tag), and a wrapped DEK that only the KMS can unwrap.
+            </p>
+          </div>
+        </section>
+      </div>
 
       <KmsFlow />
     </main>
