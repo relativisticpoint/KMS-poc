@@ -33,3 +33,8 @@ htmlcov/
 # Frontend
 ui/node_modules/
 ui/dist/
+
+# Agent docs (local-only)
+agent.md
+*/agent.md
+**/agent.md

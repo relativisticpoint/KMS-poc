@@ -3,3 +3,5 @@ uvicorn[standard]
 httpx
 cryptography
 pytest
+sqlalchemy
+psycopg2-binary

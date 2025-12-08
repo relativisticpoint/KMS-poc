@@ -8,8 +8,12 @@ services:
       - "8000:8000"
     environment:
       - MASTER_KEY_PASSPHRASE=dev-master-pass
+      - KMS_DATABASE_URL=postgresql+psycopg2://kms:kms@kms-db:5432/kms_poc_kms
     networks:
       - backend
+    depends_on:
+      kms-db:
+        condition: service_healthy
 
   data-service:
     build: ./data-service
@@ -18,25 +22,52 @@ services:
       - "8001:8001"
     environment:
       - KMS_BASE_URL=http://kms-service:8000
+      - DATABASE_URL=postgresql+psycopg2://kms:kms@kms-data-db:5432/kms_poc_data
     depends_on:
-      - kms-service
-      - db
+      kms-service:
+        condition: service_started
+      kms-data-db:
+        condition: service_healthy
     networks:
       - backend
 
-  db:
+  kms-data-db:
     image: postgres:16
-    container_name: kms-db
+    container_name: kms-data-db
     environment:
       - POSTGRES_USER=kms
       - POSTGRES_PASSWORD=kms
-      - POSTGRES_DB=kms_poc
+      - POSTGRES_DB=kms_poc_data
     ports:
       - "5432:5432"
     volumes:
-      - db_data:/var/lib/postgresql/data
+      - db_data_data:/var/lib/postgresql/data
     networks:
       - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kms -d kms_poc_data"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  kms-db:
+    image: postgres:16
+    container_name: kms-kms-db
+    environment:
+      - POSTGRES_USER=kms
+      - POSTGRES_PASSWORD=kms
+      - POSTGRES_DB=kms_poc_kms
+    ports:
+      - "55432:5432"
+    volumes:
+      - db_kms_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kms -d kms_poc_kms"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   ui:
     build: ./ui
@@ -53,4 +84,5 @@ networks:
   backend:
 
 volumes:
-  db_data:
+  db_data_data:
+  db_kms_data:

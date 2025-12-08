@@ -7,11 +7,11 @@ and a data service that uses envelope encryption.
 
 - KMS Service (FastAPI, port 8000)
 - Data Service (FastAPI, port 8001)
-- PostgreSQL database (port 5432)
+- PostgreSQL databases (separate instances for KMS CRKs and data records)
 
 Current state:
-- KMS exposes in-memory endpoints to create/rotate CRKs and generate/unwrap DEKs using AES-GCM wrapping (real crypto), still stored in memory. Per-customer CRK reuse (get-or-create) is enforced server-side.
-- Data service calls KMS, AES-GCM encrypts/decrypts data, and stores records in memory (no Postgres usage yet).
+- KMS persists CRKs in its own Postgres instance, exposing endpoints to create/rotate CRKs and generate/unwrap DEKs using AES-GCM wrapping (real crypto). Per-customer CRK reuse (get-or-create) is enforced server-side.
+- Data service calls KMS, AES-GCM encrypts/decrypts data, and persists encrypted records in Postgres.
 - CORS is enabled on both services to support the browser UI at `ui/`.
 - UI is containerized (nginx) and available via docker-compose on port 5173.
 
@@ -69,12 +69,18 @@ The UI will be served at `http://localhost:5173` from the `ui` service (nginx).
 
 ## Notes for AI / Code Assistants
 
+Start by reading `ARCHITECTURE_KMS101.md`, then the per-service `agent.md` files at the top of each folder (`kms-service/agent.md`, `data-service/agent.md`, `ui/agent.md`) for quick summaries of responsibilities, APIs, and current state.
+
 If you're using an AI code assistant (Copilot, ChatGPT, etc.), please read
 or reference `ARCHITECTURE_KMS101.md` first. It describes:
 
 - The KMS vs data-service responsibilities
 - The key hierarchy (MK → CRK → DEK)
 - Planned APIs and crypto choices
+- Quick service overviews live in:
+  - `kms-service/agent.md`
+  - `data-service/agent.md`
+  - `ui/agent.md`
 
 Code suggestions should:
 - Keep KMS logic in `kms-service`

@@ -27,19 +27,60 @@ Environment:
 import base64
 import os
 import secrets
+import time
 import uuid
-from typing import Dict, Optional
+from contextlib import contextmanager
+from typing import Optional
 
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from sqlalchemy import JSON, Column, String, create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import Session, sessionmaker
 
 KMS_BASE_URL = os.getenv("KMS_BASE_URL", "http://kms-service:8000")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://kms:kms@kms-data-db:5432/kms_poc_data")
 
 app = FastAPI(title="Data Service")
 kms_client = httpx.Client(base_url=KMS_BASE_URL, timeout=5.0)
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+
+class DataRecord(Base):
+    __tablename__ = "data_records"
+    data_id = Column(String, primary_key=True, index=True)
+    customer_id = Column(String, index=True, nullable=False)
+    ciphertext = Column(String, nullable=False)
+    nonce = Column(String, nullable=False)
+    tag = Column(String, nullable=False)
+    wrapped_dek = Column(JSON, nullable=False)
+
+
+def _ensure_tables_with_retry(retries: int = 10, delay: float = 1.0) -> None:
+    for attempt in range(retries):
+        try:
+            Base.metadata.create_all(bind=engine)
+            return
+        except Exception:
+            if attempt == retries - 1:
+                raise
+            time.sleep(delay)
+
+_ensure_tables_with_retry()
+
+
+@contextmanager
+def get_session() -> Session:
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,20 +89,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# --- In-memory store ------------------------------------------------------
-
-class StoredData(BaseModel):
-    data_id: str
-    customer_id: str
-    ciphertext: str
-    nonce: str
-    tag: str
-    wrapped_dek: dict
-
-
-DATA_STORE: Dict[str, StoredData] = {}
 
 
 # --- Models ---------------------------------------------------------------
@@ -160,26 +187,29 @@ def store_data(payload: StoreDataRequest) -> StoreDataResponse:
     ciphertext, nonce, tag = encrypt_data(payload.data.encode("utf-8"), dek_bytes)
 
     data_id = str(uuid.uuid4())
-    record = StoredData(
-        data_id=data_id,
-        customer_id=payload.customer_id,
-        ciphertext=ciphertext,
-        nonce=nonce,
-        tag=tag,
-        wrapped_dek=wrapped_dek,
-    )
-    DATA_STORE[data_id] = record
+    with get_session() as session:
+        record = DataRecord(
+            data_id=data_id,
+            customer_id=payload.customer_id,
+            ciphertext=ciphertext,
+            nonce=nonce,
+            tag=tag,
+            wrapped_dek=wrapped_dek,
+        )
+        session.add(record)
+        session.commit()
     return StoreDataResponse(data_id=data_id)
 
 
 @app.get("/data/{data_id}", response_model=RetrieveDataResponse)
 def retrieve_data(data_id: str) -> RetrieveDataResponse:
     # Route: fetches record by data_id, unwraps DEK via KMS, AES-GCM decrypts ciphertext, returns plaintext response.
-    record = DATA_STORE.get(data_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="Data not found")
+    with get_session() as session:
+        record = session.get(DataRecord, data_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="Data not found")
 
-    dek_bytes = _unwrap_dek(record.wrapped_dek)
+        dek_bytes = _unwrap_dek(record.wrapped_dek)
     try:
         plaintext = decrypt_data(record.ciphertext, record.nonce, record.tag, dek_bytes)
     except Exception:
@@ -193,5 +223,14 @@ def retrieve_data(data_id: str) -> RetrieveDataResponse:
 #! DEBUG ONLY: remove before production; dumps raw in-memory store
 @app.get("/_debug/data")
 def debug_dump_data_store() -> dict:
-    # Route: returns raw DATA_STORE dict for troubleshooting; not for production use.
-    return DATA_STORE
+    # Route: returns raw data store for troubleshooting; not for production use.
+    with get_session() as session:
+        records = session.query(DataRecord).all()
+        return {r.data_id: {
+            "data_id": r.data_id,
+            "customer_id": r.customer_id,
+            "ciphertext": r.ciphertext,
+            "nonce": r.nonce,
+            "tag": r.tag,
+            "wrapped_dek": r.wrapped_dek,
+        } for r in records}
