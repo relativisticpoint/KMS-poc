@@ -7,9 +7,10 @@ The goal is to simulate a realistic cloud KMS setup with a clean separation of
 concerns between **key management** and **data storage / encryption**.
 
 Current implementation status:
-- KMS FastAPI implements in-memory CRK create/rotate and DEK generate/unwrap endpoints using AES-GCM wrapping (real crypto; no Postgres yet).
+- KMS FastAPI implements in-memory CRK create/rotate and DEK generate/unwrap endpoints using AES-GCM wrapping (real crypto; no Postgres yet). Per-customer CRK reuse is enforced (get-or-create).
 - Data service FastAPI calls KMS, performs AES-GCM data encryption/decryption, and stores records in memory (no Postgres yet).
 - Real crypto is in place; persistence and rotation logic remain to be added.
+- CORS is enabled to support the browser UI that calls the services directly; UI is containerized and served via docker-compose at port 5173.
 
 ## Big Picture
 
@@ -22,7 +23,7 @@ There are 3 main services:
      - Customer root keys (CRK / CMK / KEK)
      - Data encryption keys (DEK)
    - Provides an HTTP API for:
-     - Creating / rotating CRKs
+     - Creating / rotating CRKs (currently get-or-create per customer)
      - Generating DEKs wrapped under a CRK
      - Unwrapping DEKs so the data service can decrypt data
 
@@ -85,7 +86,7 @@ The data service never sees MK or CRKs. It only sees:
 We plan to implement the following endpoints in `kms-service`:
 
 1. `POST /v1/customers/{customer_id}/root-keys`
-   - Purpose: create or rotate a Customer Root Key (CRK).
+   - Purpose: create or rotate a Customer Root Key (CRK). Current behavior: get-or-create per customer (reuses existing active CRK).
    - Steps:
      - Generate random CRK bytes.
      - Encrypt CRK with MK (AES-GCM) → `crk_ciphertext_under_mk`.

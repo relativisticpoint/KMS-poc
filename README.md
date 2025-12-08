@@ -10,8 +10,10 @@ and a data service that uses envelope encryption.
 - PostgreSQL database (port 5432)
 
 Current state:
-- KMS exposes in-memory endpoints to create/rotate CRKs and generate/unwrap DEKs using AES-GCM wrapping (real crypto), still stored in memory.
+- KMS exposes in-memory endpoints to create/rotate CRKs and generate/unwrap DEKs using AES-GCM wrapping (real crypto), still stored in memory. Per-customer CRK reuse (get-or-create) is enforced server-side.
 - Data service calls KMS, AES-GCM encrypts/decrypts data, and stores records in memory (no Postgres usage yet).
+- CORS is enabled on both services to support the browser UI at `ui/`.
+- UI is containerized (nginx) and available via docker-compose on port 5173.
 
 ## Running
 
@@ -44,6 +46,26 @@ Then retrieve:
 ```
 curl http://localhost:8001/data/<uuid>
 ```
+
+## UI (visualizer)
+
+A small React UI lives under `ui/` to visualize and exercise the flow.
+
+```
+cd ui
+npm install
+npm run dev
+```
+
+Then open the printed URL (default `http://localhost:5173`) and use the form to POST/GET `/data`. Debug state panes read `/_debug/data` and `/_debug/crks` from the services (available in dev only).
+
+Running via Docker:
+
+```
+docker compose up --build
+```
+
+The UI will be served at `http://localhost:5173` from the `ui` service (nginx).
 
 ## Notes for AI / Code Assistants
 

@@ -38,6 +38,17 @@ services:
     networks:
       - backend
 
+  ui:
+    build: ./ui
+    container_name: kms-ui
+    ports:
+      - "5173:80"
+    depends_on:
+      - kms-service
+      - data-service
+    networks:
+      - backend
+
 networks:
   backend:
 
