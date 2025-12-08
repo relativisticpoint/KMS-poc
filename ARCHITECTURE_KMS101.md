@@ -7,9 +7,9 @@ The goal is to simulate a realistic cloud KMS setup with a clean separation of
 concerns between **key management** and **data storage / encryption**.
 
 Current implementation status:
-- KMS FastAPI implements in-memory CRK create/rotate and DEK generate/unwrap endpoints using AES-GCM wrapping (real crypto; no Postgres yet). Per-customer CRK reuse is enforced (get-or-create).
-- Data service FastAPI calls KMS, performs AES-GCM data encryption/decryption, and stores records in memory (no Postgres yet).
-- Real crypto is in place; persistence and rotation logic remain to be added.
+- KMS FastAPI persists CRKs in its own Postgres instance, implements CRK create/rotate and DEK generate/unwrap endpoints using AES-GCM wrapping (real crypto). Per-customer CRK reuse is enforced (get-or-create).
+- Data service FastAPI calls KMS, performs AES-GCM data encryption/decryption, and stores records in Postgres.
+- Real crypto is in place; rotation logic and auth/hardening remain to be added.
 - CORS is enabled to support the browser UI that calls the services directly; UI is containerized and served via docker-compose at port 5173.
 
 ## Big Picture
@@ -33,13 +33,13 @@ There are 3 main services:
    - For each piece of data:
      - Requests a DEK from the KMS.
      - Encrypts data locally with that DEK using AES-GCM.
-     - Stores ciphertext + wrapped DEK + metadata (currently in-memory; later Postgres).
+     - Stores ciphertext + wrapped DEK + metadata in Postgres.
 
 3. **Database (PostgreSQL, port 5432)**
    - Stores:
      - Encrypted data records (ciphertext, nonce, tag, etc.)
      - Wrapped DEKs and key metadata
-   - The KMS will also store CRK metadata and wrapped CRKs here.
+   - KMS uses its own Postgres instance to store CRK metadata and wrapped CRKs.
 
 Communication:
 
@@ -154,11 +154,9 @@ In `data-service`, we plan endpoints like:
    - CRK and DEK endpoints in KMS with in-memory storage and AES-GCM wrapping.
    - Data endpoints call KMS, AES-GCM encrypt/decrypt, and store data in memory.
 
-3. **Persistence (next):**
-   - Add SQLAlchemy models for:
-     - CRKs
-     - Encrypted data objects, including wrapped DEKs
-   - Store everything in Postgres.
+3. **Persistence (done):**
+   - SQLAlchemy models for CRKs (KMS) and encrypted data objects (data-service).
+   - Stored in separate Postgres instances.
 
 4. **Extras (if time):**
    - Key rotation logic.
@@ -180,6 +178,10 @@ When generating code in this repo, please:
 - Prefer clear, explicit functions with docstrings describing:
   - Which key level they operate on (MK, CRK, DEK).
   - Whether they are doing wrap/unwrap or encrypt/decrypt data.
+- Quick service cheat-sheets:
+  - `kms-service/agent.md`
+  - `data-service/agent.md`
+  - `ui/agent.md`
 
 The main objective is to demonstrate a clean envelope encryption
 implementation with a realistic microservice separation suitable for a

@@ -1,13 +1,13 @@
 .app-shell {
   min-height: 100vh;
-  background: radial-gradient(180% 140% at 20% 20%, #f8fafc, #e2e8f0);
+  background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
   color: #0f172a;
   padding: 32px 16px 48px;
   font-family: "Inter", system-ui, -apple-system, sans-serif;
 }
 
 .hero {
-  max-width: 720px;
+  max-width: 960px;
   margin: 0 auto 24px;
   text-align: center;
 }
@@ -19,16 +19,25 @@
 }
 
 .hero p {
-  margin: 0;
+  margin: 0 auto;
   color: #334155;
-  line-height: 1.5;
+  line-height: 1.6;
+  max-width: 820px;
+}
+
+.steps {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .cards-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
-  max-width: 1200px;
+  max-width: 1280px;
   margin: 0 auto;
 }
 
@@ -53,6 +62,18 @@
   font-weight: 700;
 }
 
+.card-data {
+  border-top: 3px solid #0ea5e9;
+}
+
+.card-kms {
+  border-top: 3px solid #8b5cf6;
+}
+
+.card-db {
+  border-top: 3px solid #14b8a6;
+}
+
 .card-header h2 {
   margin: 0 0 10px;
   font-size: 20px;
@@ -62,6 +83,10 @@
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.single-input {
+  margin-top: 4px;
 }
 
 label {
@@ -91,6 +116,28 @@ textarea {
   resize: vertical;
 }
 
+.accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  color: #0ea5e9;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.advanced-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -115,6 +162,16 @@ button.ghost {
   box-shadow: none;
 }
 
+button.small {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .status {
   margin-top: 10px;
   padding: 10px;
@@ -123,6 +180,18 @@ button.ghost {
   border: 1px solid #bfdbfe;
   color: #0f172a;
   font-weight: 600;
+}
+
+.divider {
+  margin-top: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.helper {
+  margin: 8px 0 0;
+  color: #334155;
+  font-size: 13px;
 }
 
 .state-block {
@@ -164,4 +233,45 @@ button.ghost {
   color: #334155;
   line-height: 1.5;
   font-size: 13px;
+}
+
+.bullet-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #334155;
+  line-height: 1.5;
+  font-size: 13px;
+}
+
+.faint {
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.pill.step {
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border: 1px solid #cbd5e1;
+}
+
+.pill.step.data {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.pill.step.kms {
+  background: #f5f3ff;
+  border-color: #ddd6fe;
+}
+
+.pill.step.db {
+  background: #ecfdf3;
+  border-color: #bbf7d0;
+}
+
+.section-title {
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 8px;
 }

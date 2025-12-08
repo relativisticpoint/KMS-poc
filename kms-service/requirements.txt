@@ -2,3 +2,5 @@ fastapi
 uvicorn[standard]
 cryptography
 pytest
+sqlalchemy
+psycopg2-binary

@@ -12,11 +12,16 @@ const App = () => {
   const [plaintext, setPlaintext] = useState("Hello KMS101");
   const [crkId, setCrkId] = useState("");
   const [latestId, setLatestId] = useState("");
+  const [decryptId, setDecryptId] = useState("");
   const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(false);
   const [dataStore, setDataStore] = useState({});
   const [crkStore, setCrkStore] = useState({});
   const [dataBaseUrl, setDataBaseUrl] = useState(apiDefaults.dataBaseUrl);
   const [kmsBaseUrl, setKmsBaseUrl] = useState(apiDefaults.kmsBaseUrl);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [lastCrkUsed, setLastCrkUsed] = useState(null);
+  const [lastRequest, setLastRequest] = useState("");
 
   const fetchStores = async () => {
     try {
@@ -38,6 +43,7 @@ const App = () => {
 
   const handleEncrypt = async () => {
     setStatus("Encrypting...");
+    setLoading(true);
     try {
       const resp = await fetch(`${dataBaseUrl}/data`, {
         method: "POST",
@@ -53,29 +59,41 @@ const App = () => {
       }
       const body = await resp.json();
       setLatestId(body.data_id);
+      setDecryptId((prev) => prev || body.data_id);
       setStatus(`Stored data_id ${body.data_id}`);
+      if (body?.wrapped_dek?.crk_id) {
+        setLastCrkUsed(body.wrapped_dek.crk_id);
+      }
+      setLastRequest("POST /data → POST /v1/deks:generate");
       await fetchStores();
     } catch (err) {
       setStatus(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleDecrypt = async () => {
-    if (!latestId) {
-      setStatus("No data_id yet—store data first.");
+    const targetId = decryptId || latestId;
+    if (!targetId) {
+      setStatus("Provide a data_id or store data first.");
       return;
     }
     setStatus("Decrypting...");
+    setLoading(true);
     try {
-      const resp = await fetch(`${dataBaseUrl}/data/${latestId}`);
+      const resp = await fetch(`${dataBaseUrl}/data/${targetId}`);
       const body = await resp.json();
       if (!resp.ok) {
         throw new Error(body.detail || `Fetch failed: ${resp.status}`);
       }
-      setStatus(`Decrypted: ${body.data}`);
+      setStatus(`Decrypted (${targetId}): ${body.data}`);
+      setLastRequest(`GET /data/${targetId} → POST /v1/deks:unwrap`);
       await fetchStores();
     } catch (err) {
       setStatus(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -84,17 +102,26 @@ const App = () => {
       <header className="hero">
         <h1>KMS101 – Envelope Encryption</h1>
         <p>
-          See how the KMS, CRKs, and DEKs work together to encrypt and decrypt data
-          in the PoC.
+          An interactive demonstration of how envelope encryption works. Data is encrypted with a
+          Data Encryption Key (DEK), which is then encrypted with a Customer Root Key (CRK) from the
+          KMS before storage.
         </p>
+        <div className="steps">
+          <span className="pill step data">1) Store data</span>
+          <span className="pill step kms">2) KMS generates DEK</span>
+          <span className="pill step db">3) DB stores ciphertext</span>
+          <span className="pill step kms">4) KMS unwraps DEK</span>
+          <span className="pill step data">5) Data service decrypts</span>
+        </div>
       </header>
 
       <div className="cards-grid">
-        <section className="card">
+        <section className="card card-data">
           <div className="card-header">
             <p className="eyebrow">Application</p>
             <h2>Data service</h2>
           </div>
+          <div className="section-title">Store &amp; encrypt data</div>
           <div className="form-grid">
             <label>
               Customer ID
@@ -116,42 +143,96 @@ const App = () => {
                 placeholder="auto-create if empty"
               />
             </label>
+            <div className="accordion">
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => setAdvancedOpen((o) => !o)}
+              >
+                {advancedOpen ? "Hide advanced (URLs)" : "Show advanced (URLs)"}
+              </button>
+              {advancedOpen && (
+                <div className="advanced-grid">
+                  <label>
+                    Data service URL
+                    <input value={dataBaseUrl} onChange={(e) => setDataBaseUrl(e.target.value)} />
+                  </label>
+                  <label>
+                    KMS service URL
+                    <input value={kmsBaseUrl} onChange={(e) => setKmsBaseUrl(e.target.value)} />
+                  </label>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="actions">
+            <button onClick={handleEncrypt} disabled={loading}>
+              {loading ? "Working..." : "Store data (POST /data)"}
+            </button>
+          </div>
+          <p className="helper">
+            This calls POST <code>/data</code> on the data service, which calls the KMS to generate a
+            DEK and stores ciphertext + wrapped DEK in the database.
+          </p>
+
+          <div className="divider">Decrypt data</div>
+          <div className="single-input">
             <label>
-              Data service URL
-              <input value={dataBaseUrl} onChange={(e) => setDataBaseUrl(e.target.value)} />
-            </label>
-            <label>
-              KMS service URL
-              <input value={kmsBaseUrl} onChange={(e) => setKmsBaseUrl(e.target.value)} />
+              Data ID to decrypt
+              <input
+                value={decryptId}
+                onChange={(e) => setDecryptId(e.target.value)}
+                placeholder="enter data_id or use latest"
+              />
             </label>
           </div>
           <div className="actions">
-            <button onClick={handleEncrypt}>Store data (POST /data)</button>
-            <button onClick={handleDecrypt} className="ghost">
-              Decrypt latest (GET /data/&lt;id&gt;)
+            <button onClick={handleDecrypt} disabled={loading}>
+              {loading ? "Working..." : "Decrypt (GET /data/<id>)"}
             </button>
-            <button onClick={fetchStores} className="ghost">
+            <button
+              className="ghost small"
+              type="button"
+              onClick={() => setDecryptId(latestId)}
+              disabled={!latestId}
+            >
+              Use latest ID
+            </button>
+            <button className="ghost" onClick={fetchStores} type="button">
               Refresh debug state
             </button>
           </div>
-          <div className="small-debug">
-            <div>
-              <strong>Latest data_id:</strong> {latestId || "none yet"}
+          {(latestId || status) && (
+            <div className="small-debug">
+              {latestId && (
+                <div>
+                  <strong>Latest data_id:</strong> {latestId}
+                </div>
+              )}
+              {status && (
+                <div className="status">
+                  <strong>Last result:</strong> {status}
+                </div>
+              )}
             </div>
-            {status && <div className="status">{status}</div>}
-          </div>
+          )}
           <div className="card-footer">
             <h4>What the data service does</h4>
-            <p>
-              This card simulates the application / data service. When you click <em>Store data</em>,
-              it calls POST <code>/data</code>. The data service then calls the KMS to get a Data
-              Encryption Key (DEK), encrypts your plaintext with the DEK, and stores only ciphertext
-              + a wrapped DEK in the database.
-            </p>
+            <ul className="bullet-list">
+              <li>Exposes <code>/data</code> to store and retrieve encrypted data.</li>
+              <li>
+                For storing, it calls the KMS to get a DEK, encrypts plaintext, and stores ciphertext
+                + wrapped DEK.
+              </li>
+              <li>
+                For decrypting, it loads the wrapped DEK and asks the KMS to unwrap it before
+                decrypting.
+              </li>
+            </ul>
           </div>
         </section>
 
-        <section className="card">
+        <section className="card card-kms">
           <div className="card-header">
             <p className="eyebrow">Keys</p>
             <h2>KMS</h2>
@@ -162,16 +243,22 @@ const App = () => {
           </div>
           <div className="card-footer">
             <h4>What the KMS does</h4>
-            <p>
-              The KMS owns the master key and customer root keys (CRKs). For encryption it generates
-              a DEK and wraps it with a CRK via <code>POST /v1/deks:generate</code>. For decryption
-              it unwraps the DEK via <code>POST /v1/deks:unwrap</code>. It never stores plaintext
-              data—only key material and crypto operations.
-            </p>
+            <ul className="bullet-list">
+              <li>Owns the master key and customer root keys (CRKs).</li>
+              <li>
+                When storing data, data-service calls <code>POST /v1/deks:generate</code> to create
+                a DEK and wrap it under a CRK.
+              </li>
+              <li>
+                When decrypting, data-service calls <code>POST /v1/deks:unwrap</code> so it can
+                decrypt locally.
+              </li>
+              <li>The KMS never stores plaintext application data.</li>
+            </ul>
           </div>
         </section>
 
-        <section className="card">
+        <section className="card card-db">
           <div className="card-header">
             <p className="eyebrow">Storage</p>
             <h2>Database</h2>
@@ -182,11 +269,14 @@ const App = () => {
           </div>
           <div className="card-footer">
             <h4>What the database stores</h4>
-            <p>
-              The database holds only encrypted data and wrapped DEKs. It does not have the master
-              key or CRKs, so it cannot decrypt by itself. Each record contains ciphertext, AEAD
-              metadata (nonce/tag), and a wrapped DEK that only the KMS can unwrap.
-            </p>
+            <ul className="bullet-list">
+              <li>Only encrypted data and wrapped DEKs.</li>
+              <li>No master key and no CRKs → cannot decrypt by itself.</li>
+              <li>
+                Each record has ciphertext + AEAD metadata (nonce, tag) and a wrapped DEK that only
+                the KMS can unwrap.
+              </li>
+            </ul>
           </div>
         </section>
       </div>

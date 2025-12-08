@@ -26,8 +26,10 @@ Planned endpoints:
 import base64
 import os
 import secrets
+import time
 import uuid
-from typing import Dict, List, Optional
+from contextlib import contextmanager
+from typing import Optional
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -35,6 +37,13 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from sqlalchemy import Column, Integer, String, create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import Session, sessionmaker
+
+DATABASE_URL = os.getenv(
+    "KMS_DATABASE_URL", "postgresql+psycopg2://kms:kms@kms-db:5432/kms_poc_kms"
+)
 
 app = FastAPI(title="KMS Service")
 
@@ -46,22 +55,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# --- In-memory stores ------------------------------------------------------
-
-class CRKRecord(BaseModel):
-    crk_id: str
-    customer_id: str
-    version: int
-    status: str = "active"
-    algorithm: str = "AES256"
-    wrapped_crk: str  # CRK encrypted under MK
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
 
-# Keyed by crk_id for quick lookup
-CRK_STORE: Dict[str, CRKRecord] = {}
-# Track versions per customer
-CRK_VERSIONS: Dict[str, List[str]] = {}
+class CRKModel(Base):
+    __tablename__ = "crks"
+    crk_id = Column(String, primary_key=True, index=True)
+    customer_id = Column(String, index=True, nullable=False)
+    version = Column(Integer, nullable=False)
+    status = Column(String, nullable=False)
+    algorithm = Column(String, nullable=False)
+    wrapped_crk = Column(String, nullable=False)
+
+
+def _ensure_tables_with_retry(retries: int = 10, delay: float = 1.0) -> None:
+    for attempt in range(retries):
+        try:
+            Base.metadata.create_all(bind=engine)
+            return
+        except Exception:
+            if attempt == retries - 1:
+                raise
+            time.sleep(delay)
+
+_ensure_tables_with_retry()
+
+
+@contextmanager
+def get_session() -> Session:
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 # --- Models ---------------------------------------------------------------
@@ -146,50 +174,56 @@ def health() -> dict:
 @app.post("/v1/customers/{customer_id}/root-keys", response_model=CreateCRKResponse)
 def create_root_key(customer_id: str) -> CreateCRKResponse:
     # Route: get-or-create CRK for customer_id; reuses existing active CRK, otherwise creates and wraps with MK.
-    existing_ids = CRK_VERSIONS.get(customer_id, [])
-    if existing_ids:
-        existing = CRK_STORE[existing_ids[-1]]
+    with get_session() as session:
+        existing = (
+            session.query(CRKModel)
+            .filter(CRKModel.customer_id == customer_id)
+            .order_by(CRKModel.version.desc())
+            .first()
+        )
+        if existing:
+            return CreateCRKResponse(
+                crk_id=existing.crk_id,
+                customer_id=existing.customer_id,
+                version=existing.version,
+                status=existing.status,
+                algorithm=existing.algorithm,
+            )
+
+        mk = derive_master_key()
+        crk_bytes = secrets.token_bytes(32)
+        wrapped_crk = aes_gcm_encrypt(mk, crk_bytes)
+
+        version = 1
+        crk_id = str(uuid.uuid4())
+
+        record = CRKModel(
+            crk_id=crk_id,
+            customer_id=customer_id,
+            version=version,
+            status="active",
+            algorithm="AES256",
+            wrapped_crk=wrapped_crk,
+        )
+        session.add(record)
+        session.commit()
+
         return CreateCRKResponse(
-            crk_id=existing.crk_id,
-            customer_id=existing.customer_id,
-            version=existing.version,
-            status=existing.status,
-            algorithm=existing.algorithm,
+            crk_id=crk_id,
+            customer_id=customer_id,
+            version=version,
+            status=record.status,
+            algorithm=record.algorithm,
         )
 
-    mk = derive_master_key()
-    crk_bytes = secrets.token_bytes(32)
-    wrapped_crk = aes_gcm_encrypt(mk, crk_bytes)
 
-    version = len(CRK_VERSIONS.get(customer_id, [])) + 1
-    crk_id = str(uuid.uuid4())
-
-    record = CRKRecord(
-        crk_id=crk_id,
-        customer_id=customer_id,
-        version=version,
-        status="active",
-        algorithm="AES256",
-        wrapped_crk=wrapped_crk,
-    )
-    CRK_STORE[crk_id] = record
-    CRK_VERSIONS.setdefault(customer_id, []).append(crk_id)
-
-    return CreateCRKResponse(
-        crk_id=crk_id,
-        customer_id=customer_id,
-        version=version,
-        status=record.status,
-        algorithm=record.algorithm,
-    )
-
-
-def _load_crk(crk_id: str) -> CRKRecord:
+def _load_crk(crk_id: str) -> CRKModel:
     # Helper: fetch CRK record by crk_id or raise 404.
-    record = CRK_STORE.get(crk_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="CRK not found")
-    return record
+    with get_session() as session:
+        record = session.get(CRKModel, crk_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="CRK not found")
+        return record
 
 
 @app.post("/v1/deks:generate", response_model=GenerateDEKResponse)
@@ -236,5 +270,17 @@ def unwrap_dek(payload: UnwrapDEKRequest) -> UnwrapDEKResponse:
 # DEBUG ONLY: remove before production; dumps in-memory CRK store
 @app.get("/_debug/crks")
 def debug_dump_crks() -> dict:
-    # Route: returns raw CRK_STORE including wrapped CRKs for troubleshooting; not for production use.
-    return {crk_id: record.dict() for crk_id, record in CRK_STORE.items()}
+    # Route: returns raw CRKs including wrapped CRKs for troubleshooting; not for production use.
+    with get_session() as session:
+        records = session.query(CRKModel).all()
+        return {
+            r.crk_id: {
+                "crk_id": r.crk_id,
+                "customer_id": r.customer_id,
+                "version": r.version,
+                "status": r.status,
+                "algorithm": r.algorithm,
+                "wrapped_crk": r.wrapped_crk,
+            }
+            for r in records
+        }
