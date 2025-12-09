@@ -30,16 +30,21 @@ import secrets
 import time
 import uuid
 from contextlib import contextmanager
-from typing import Optional
+from typing import Optional, Deque, List, Dict
+from collections import deque
+import logging
+import sys
 
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Request
 from pydantic import BaseModel, Field
 from sqlalchemy import JSON, Column, String, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
+from pythonjsonlogger import jsonlogger
 
 KMS_BASE_URL = os.getenv("KMS_BASE_URL", "http://kms-service:8000")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://kms:kms@kms-data-db:5432/kms_poc_data")
@@ -50,6 +55,23 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+# --- Logging / audit ------------------------------------------------------
+
+logger = logging.getLogger("data-service")
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler(sys.stdout)
+formatter = jsonlogger.JsonFormatter()
+handler.setFormatter(formatter)
+logger.handlers = [handler]
+
+AuditLogBuffer: Deque[Dict] = deque(maxlen=100)
+
+
+def audit(event: str, level: str = "INFO", **fields) -> None:
+    payload = {"event": event, "level": level, **fields}
+    AuditLogBuffer.append(payload)
+    logger.log(logging.getLevelName(level), event, extra=fields)
+
 
 class DataRecord(Base):
     __tablename__ = "data_records"
@@ -59,6 +81,19 @@ class DataRecord(Base):
     nonce = Column(String, nullable=False)
     tag = Column(String, nullable=False)
     wrapped_dek = Column(JSON, nullable=False)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(String, primary_key=True, index=True)
+    ts = Column(String, nullable=False)
+    level = Column(String, nullable=False)
+    event = Column(String, nullable=False)
+    corr_id = Column(String, nullable=True)
+    customer_id = Column(String, nullable=True)
+    crk_id = Column(String, nullable=True)
+    data_id = Column(String, nullable=True)
+    detail = Column(JSON, nullable=True)
 
 
 def _ensure_tables_with_retry(retries: int = 10, delay: float = 1.0) -> None:
@@ -82,6 +117,30 @@ def get_session() -> Session:
     finally:
         session.close()
 
+
+def _persist_audit(
+    session: Session,
+    event: str,
+    level: str = "INFO",
+    corr_id: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    crk_id: Optional[str] = None,
+    data_id: Optional[str] = None,
+    detail: Optional[dict] = None,
+) -> None:
+    entry = AuditLog(
+        id=str(uuid.uuid4()),
+        ts=str(time.time()),
+        level=level,
+        event=event,
+        corr_id=corr_id,
+        customer_id=customer_id,
+        crk_id=crk_id,
+        data_id=data_id,
+        detail=detail or {},
+    )
+    session.add(entry)
+#! To update before production: allow only KMS service origin
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -135,24 +194,26 @@ def decrypt_data(ciphertext_b64: str, nonce_b64: str, tag_b64: str, dek: bytes) 
 
 # --- Helpers --------------------------------------------------------------
 
-def _ensure_crk(customer_id: str, crk_id: Optional[str]) -> str:
+def _ensure_crk(customer_id: str, crk_id: Optional[str], corr_id: str) -> str:
     # Helper: use provided crk_id or create a new CRK via KMS for customer_id; returns crk_id.
     if crk_id:
         return crk_id
-    resp = kms_client.post(f"/v1/customers/{customer_id}/root-keys")
+    headers = {"X-Correlation-ID": corr_id}
+    resp = kms_client.post(f"/v1/customers/{customer_id}/root-keys", headers=headers)
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to create CRK via KMS")
     return resp.json()["crk_id"]
 
 
-def _generate_dek(customer_id: str, crk_id: str) -> tuple[bytes, dict]:
+def _generate_dek(customer_id: str, crk_id: str, corr_id: str) -> tuple[bytes, dict]:
     # Helper: call KMS /v1/deks:generate with customer_id and crk_id; returns plaintext DEK bytes and wrapped_dek dict.
     payload = {
         "customer_id": customer_id,
         "crk_id": crk_id,
         "dek_algorithm": "AES256",
     }
-    resp = kms_client.post("/v1/deks:generate", json=payload)
+    headers = {"X-Correlation-ID": corr_id}
+    resp = kms_client.post("/v1/deks:generate", json=payload, headers=headers)
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to generate DEK via KMS")
 
@@ -161,9 +222,10 @@ def _generate_dek(customer_id: str, crk_id: str) -> tuple[bytes, dict]:
     return dek_plaintext, body["wrapped_dek"]
 
 
-def _unwrap_dek(wrapped_dek: dict) -> bytes:
+def _unwrap_dek(wrapped_dek: dict, corr_id: str) -> bytes:
     # Helper: call KMS /v1/deks:unwrap with wrapped_dek; returns plaintext DEK bytes.
-    resp = kms_client.post("/v1/deks:unwrap", json={"wrapped_dek": wrapped_dek})
+    headers = {"X-Correlation-ID": corr_id}
+    resp = kms_client.post("/v1/deks:unwrap", json={"wrapped_dek": wrapped_dek}, headers=headers)
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to unwrap DEK via KMS")
     plaintext_b64 = resp.json()["plaintext_dek"]
@@ -179,15 +241,24 @@ def health() -> dict:
 
 
 @app.post("/data", response_model=StoreDataResponse)
-def store_data(payload: StoreDataRequest) -> StoreDataResponse:
-    # Route: accepts StoreDataRequest with customer_id/data/crk_id; ensures CRK, gets DEK from KMS, AES-GCM encrypts data, stores in-memory, returns data_id.
-    crk_id = _ensure_crk(payload.customer_id, payload.crk_id)
-    dek_bytes, wrapped_dek = _generate_dek(payload.customer_id, crk_id)
+def store_data(payload: StoreDataRequest, request: Request) -> StoreDataResponse:
+    # Route: accepts StoreDataRequest with customer_id/data/crk_id; ensures CRK, gets DEK from KMS, AES-GCM encrypts data, stores in DB, returns data_id.
+    corr_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
+    crk_id = _ensure_crk(payload.customer_id, payload.crk_id, corr_id)
+    dek_bytes, wrapped_dek = _generate_dek(payload.customer_id, crk_id, corr_id)
 
     ciphertext, nonce, tag = encrypt_data(payload.data.encode("utf-8"), dek_bytes)
 
     data_id = str(uuid.uuid4())
     with get_session() as session:
+        _persist_audit(
+            session,
+            event="data.store.requested",
+            corr_id=corr_id,
+            customer_id=payload.customer_id,
+            crk_id=crk_id,
+            data_id=data_id,
+        )
         record = DataRecord(
             data_id=data_id,
             customer_id=payload.customer_id,
@@ -197,40 +268,76 @@ def store_data(payload: StoreDataRequest) -> StoreDataResponse:
             wrapped_dek=wrapped_dek,
         )
         session.add(record)
+        _persist_audit(
+            session,
+            event="data.store.encrypted",
+            corr_id=corr_id,
+            customer_id=payload.customer_id,
+            crk_id=crk_id,
+            data_id=data_id,
+        )
         session.commit()
+    audit("data.store.encrypted", corr_id=corr_id, customer_id=payload.customer_id, crk_id=crk_id, data_id=data_id)
     return StoreDataResponse(data_id=data_id)
 
 
 @app.get("/data/{data_id}", response_model=RetrieveDataResponse)
-def retrieve_data(data_id: str) -> RetrieveDataResponse:
+def retrieve_data(data_id: str, request: Request) -> RetrieveDataResponse:
     # Route: fetches record by data_id, unwraps DEK via KMS, AES-GCM decrypts ciphertext, returns plaintext response.
+    corr_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
     with get_session() as session:
         record = session.get(DataRecord, data_id)
         if not record:
             raise HTTPException(status_code=404, detail="Data not found")
 
-        dek_bytes = _unwrap_dek(record.wrapped_dek)
+        dek_bytes = _unwrap_dek(record.wrapped_dek, corr_id)
     try:
         plaintext = decrypt_data(record.ciphertext, record.nonce, record.tag, dek_bytes)
     except Exception:
         raise HTTPException(status_code=400, detail="Failed to decrypt data")
 
+    with get_session() as session:
+        _persist_audit(
+            session,
+            event="data.decrypt.decrypted",
+            corr_id=corr_id,
+            customer_id=record.customer_id,
+            crk_id=record.wrapped_dek.get("crk_id") if isinstance(record.wrapped_dek, dict) else None,
+            data_id=record.data_id,
+        )
+        session.commit()
+    audit(
+        "data.decrypt.decrypted",
+        corr_id=corr_id,
+        customer_id=record.customer_id,
+        crk_id=record.wrapped_dek.get("crk_id") if isinstance(record.wrapped_dek, dict) else None,
+        data_id=record.data_id,
+    )
     return RetrieveDataResponse(
         data_id=record.data_id, customer_id=record.customer_id, data=plaintext.decode("utf-8")
     )
 
 
-#! DEBUG ONLY: remove before production; dumps raw in-memory store
+#! DEBUG ONLY: remove before production; dumps raw data store
 @app.get("/_debug/data")
 def debug_dump_data_store() -> dict:
     # Route: returns raw data store for troubleshooting; not for production use.
     with get_session() as session:
         records = session.query(DataRecord).all()
-        return {r.data_id: {
-            "data_id": r.data_id,
-            "customer_id": r.customer_id,
-            "ciphertext": r.ciphertext,
-            "nonce": r.nonce,
-            "tag": r.tag,
-            "wrapped_dek": r.wrapped_dek,
-        } for r in records}
+        return {
+            r.data_id: {
+                "data_id": r.data_id,
+                "customer_id": r.customer_id,
+                "ciphertext": r.ciphertext,
+                "nonce": r.nonce,
+                "tag": r.tag,
+                "wrapped_dek": r.wrapped_dek,
+            }
+            for r in records
+        }
+
+
+# DEBUG ONLY: recent audit logs
+@app.get("/_debug/logs")
+def debug_logs() -> List[Dict]:
+    return list(AuditLogBuffer)
