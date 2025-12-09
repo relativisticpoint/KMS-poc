@@ -11,6 +11,7 @@ Current implementation status:
 - Data service FastAPI calls KMS, performs AES-GCM data encryption/decryption, and stores records in Postgres.
 - Real crypto is in place; rotation logic and auth/hardening remain to be added.
 - CORS is enabled to support the browser UI that calls the services directly; UI is containerized and served via docker-compose at port 5173.
+- Observability: structured JSON logs with correlation IDs; recent events exposed via `/ _debug/logs` (dev only) and persisted audit tables in both DBs.
 
 ## Big Picture
 
@@ -188,6 +189,10 @@ When generating code in this repo, please:
   - `kms-service/agent.md`
   - `data-service/agent.md`
   - `ui/agent.md`
+- Observability:
+  - Structured JSON logs (no secrets) with correlation IDs (`X-Correlation-ID` propagated from data-service to KMS).
+  - Recent events exposed via `/ _debug/logs` (dev only) using in-memory buffers.
+  - Audit persisted in Postgres (`audit_logs` table) in each service DB.
 
 The main objective is to demonstrate a clean envelope encryption
 implementation with a realistic microservice separation suitable for a

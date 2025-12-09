@@ -20,6 +20,7 @@ Current state:
 - Data service calls KMS, AES-GCM encrypts/decrypts data, and persists encrypted records in Postgres.
 - CORS is enabled on both services to support the browser UI at `ui/`.
 - UI is containerized (nginx) and available via docker-compose on port 5173.
+- Observability: both services emit structured JSON logs, keep recent events in an in-memory buffer, and expose `/ _debug/logs` for UI/inspection (dev only). Audit logs also persisted in Postgres.
 
 ## Running
 

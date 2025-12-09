@@ -29,17 +29,21 @@ import secrets
 import time
 import uuid
 from contextlib import contextmanager
-from typing import Optional
+from typing import Optional, Deque, Dict, List
+from collections import deque
+import logging
+import sys
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import Column, Integer, String, create_engine
+from sqlalchemy import Column, Integer, String, create_engine, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
+from pythonjsonlogger import jsonlogger
 
 DATABASE_URL = os.getenv(
     "KMS_DATABASE_URL", "postgresql+psycopg2://kms:kms@kms-db:5432/kms_poc_kms"
@@ -47,6 +51,7 @@ DATABASE_URL = os.getenv(
 
 app = FastAPI(title="KMS Service")
 
+#! To update before production: allow only data service origin
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -59,6 +64,23 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+# --- Logging / audit ------------------------------------------------------
+
+logger = logging.getLogger("kms-service")
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler(sys.stdout)
+formatter = jsonlogger.JsonFormatter()
+handler.setFormatter(formatter)
+logger.handlers = [handler]
+
+AuditLogBuffer: Deque[Dict] = deque(maxlen=100)
+
+
+def audit(event: str, level: str = "INFO", **fields) -> None:
+    payload = {"event": event, "level": level, **fields}
+    AuditLogBuffer.append(payload)
+    logger.log(logging.getLevelName(level), event, extra=fields)
+
 
 class CRKModel(Base):
     __tablename__ = "crks"
@@ -68,6 +90,18 @@ class CRKModel(Base):
     status = Column(String, nullable=False)
     algorithm = Column(String, nullable=False)
     wrapped_crk = Column(String, nullable=False)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(String, primary_key=True, index=True)
+    ts = Column(String, nullable=False)
+    level = Column(String, nullable=False)
+    event = Column(String, nullable=False)
+    corr_id = Column(String, nullable=True)
+    customer_id = Column(String, nullable=True)
+    crk_id = Column(String, nullable=True)
+    detail = Column(JSON, nullable=True)
 
 
 def _ensure_tables_with_retry(retries: int = 10, delay: float = 1.0) -> None:
@@ -90,6 +124,28 @@ def get_session() -> Session:
         yield session
     finally:
         session.close()
+
+
+def _persist_audit(
+    session: Session,
+    event: str,
+    level: str = "INFO",
+    corr_id: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    crk_id: Optional[str] = None,
+    detail: Optional[dict] = None,
+) -> None:
+    entry = AuditLog(
+        id=str(uuid.uuid4()),
+        ts=str(time.time()),
+        level=level,
+        event=event,
+        corr_id=corr_id,
+        customer_id=customer_id,
+        crk_id=crk_id,
+        detail=detail or {},
+    )
+    session.add(entry)
 
 
 # --- Models ---------------------------------------------------------------
@@ -172,8 +228,9 @@ def health() -> dict:
 
 
 @app.post("/v1/customers/{customer_id}/root-keys", response_model=CreateCRKResponse)
-def create_root_key(customer_id: str) -> CreateCRKResponse:
+def create_root_key(customer_id: str, request: Request) -> CreateCRKResponse:
     # Route: get-or-create CRK for customer_id; reuses existing active CRK, otherwise creates and wraps with MK.
+    corr_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
     with get_session() as session:
         existing = (
             session.query(CRKModel)
@@ -182,6 +239,17 @@ def create_root_key(customer_id: str) -> CreateCRKResponse:
             .first()
         )
         if existing:
+            _persist_audit(
+                session,
+                event="kms.crk.get",
+                corr_id=corr_id,
+                customer_id=existing.customer_id,
+                crk_id=existing.crk_id,
+                detail={"version": existing.version},
+            )
+            session.commit()
+            #! Audit log
+            audit("kms.crk.get", corr_id=corr_id, customer_id=existing.customer_id, crk_id=existing.crk_id, crk_version=existing.version) 
             return CreateCRKResponse(
                 crk_id=existing.crk_id,
                 customer_id=existing.customer_id,
@@ -206,7 +274,17 @@ def create_root_key(customer_id: str) -> CreateCRKResponse:
             wrapped_crk=wrapped_crk,
         )
         session.add(record)
+        _persist_audit(
+            session,
+            event="kms.crk.created",
+            corr_id=corr_id,
+            customer_id=customer_id,
+            crk_id=crk_id,
+            detail={"version": version},
+        )
         session.commit()
+        #! Audit log
+        audit("kms.crk.created", corr_id=corr_id, customer_id=customer_id, crk_id=crk_id, crk_version=version)
 
         return CreateCRKResponse(
             crk_id=crk_id,
@@ -227,8 +305,9 @@ def _load_crk(crk_id: str) -> CRKModel:
 
 
 @app.post("/v1/deks:generate", response_model=GenerateDEKResponse)
-def generate_dek(payload: GenerateDEKRequest) -> GenerateDEKResponse:
+def generate_dek(payload: GenerateDEKRequest, request: Request) -> GenerateDEKResponse:
     # Route: given payload (customer_id, crk_id, dek_algorithm, data_context), unwraps CRK with MK, generates DEK, wraps with CRK, returns plaintext+wrapped.
+    corr_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
     record = _load_crk(payload.crk_id)
     mk = derive_master_key()
     try:
@@ -246,12 +325,24 @@ def generate_dek(payload: GenerateDEKRequest) -> GenerateDEKResponse:
         algorithm=payload.dek_algorithm,
         wrapped_key=wrapped_dek,
     )
+    with get_session() as session:
+        _persist_audit(
+            session,
+            event="kms.dek.generate",
+            corr_id=corr_id,
+            customer_id=payload.customer_id,
+            crk_id=record.crk_id,
+            detail={"crk_version": record.version},
+        )
+        session.commit()
+    audit("kms.dek.generate", corr_id=corr_id, customer_id=payload.customer_id, crk_id=record.crk_id, crk_version=record.version)
     return GenerateDEKResponse(plaintext_dek=plaintext_dek_b64, wrapped_dek=wrapped)
 
 
 @app.post("/v1/deks:unwrap", response_model=UnwrapDEKResponse)
-def unwrap_dek(payload: UnwrapDEKRequest) -> UnwrapDEKResponse:
+def unwrap_dek(payload: UnwrapDEKRequest, request: Request) -> UnwrapDEKResponse:
     # Route: given wrapped_dek payload, unwraps CRK with MK then unwraps DEK with CRK; returns plaintext DEK.
+    corr_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
     record = _load_crk(payload.wrapped_dek.crk_id)
     mk = derive_master_key()
     try:
@@ -264,6 +355,17 @@ def unwrap_dek(payload: UnwrapDEKRequest) -> UnwrapDEKResponse:
     except Exception:
         raise HTTPException(status_code=400, detail="Failed to unwrap DEK with CRK")
 
+    with get_session() as session:
+        _persist_audit(
+            session,
+            event="kms.dek.unwrap",
+            corr_id=corr_id,
+            customer_id=record.customer_id,
+            crk_id=record.crk_id,
+            detail={"crk_version": record.version},
+        )
+        session.commit()
+    audit("kms.dek.unwrap", corr_id=corr_id, customer_id=record.customer_id, crk_id=record.crk_id, crk_version=record.version)
     return UnwrapDEKResponse(plaintext_dek=base64.b64encode(dek_bytes).decode("utf-8"))
 
 
@@ -284,3 +386,9 @@ def debug_dump_crks() -> dict:
             }
             for r in records
         }
+
+
+# DEBUG ONLY: recent audit logs
+@app.get("/_debug/logs")
+def debug_logs() -> List[Dict]:
+    return list(AuditLogBuffer)
