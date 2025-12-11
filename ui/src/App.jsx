@@ -2,8 +2,8 @@ import React, { useEffect, useState } from "react";
 import "./App.css";
 
 const apiDefaults = {
-  dataBaseUrl: "http://localhost:8001",
-  kmsBaseUrl: "http://localhost:8000",
+  dataBaseUrl: "/data",
+  kmsBaseUrl: "/kms",
 };
 
 const App = () => {
