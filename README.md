@@ -74,6 +74,10 @@ docker compose up --build
 
 The UI will be served at `http://localhost:5173` from the `ui` service (nginx).
 
+## Utilities
+
+- `scripts/flush_db.sh` : truncate data and KMS Postgres tables (data_records, crks, audit_logs) while services are running to reset the playground quickly.
+
 ## Notes for AI / Code Assistants
 
 Start by reading `ARCHITECTURE_KMS101.md`, then the per-service `agent.md` files at the top of each folder (`kms-service/agent.md`, `data-service/agent.md`, `ui/agent.md`) for quick summaries of responsibilities, APIs, and current state.

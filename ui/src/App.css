@@ -130,13 +130,14 @@ textarea {
 
 .link-button {
   background: none;
-  border: 1px dashed #0ea5e9;
-  color: #0ea5e9;
-  font-weight: 700;
+  border: 1px dashed #cbd5e1;
+  color: #475569;
+  font-weight: 600;
   cursor: pointer;
   padding: 8px 10px;
   text-align: left;
   border-radius: 8px;
+  box-shadow: none;
 }
 
 .advanced-grid {
@@ -215,6 +216,33 @@ button:disabled {
   font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
     monospace;
   font-size: 12px;
+}
+
+.state-block.logs {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.state-block.compact {
+  max-height: 200px;
+}
+
+.log-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.log-event {
+  font-weight: 700;
+}
+
+.log-meta {
+  color: #475569;
+  margin-left: 6px;
 }
 
 .subtitle {
