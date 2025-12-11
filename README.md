@@ -24,7 +24,7 @@ curl http://localhost:8001/health
 
 UI:
 - Open `http://localhost:5173`
-- Use the form to POST/GET `/data`; debug panes read from `/_debug/data`, `/_debug/crks`, `/_debug/logs` (dev only).
+- Use the buttons to POST/GET `/data` endpoints and visualize logs/data
 
 Manual API test (without UI):
 Issue a POST request to the data service to encrypt and store data, then a GET request to retrieve and decrypt it:
@@ -35,18 +35,11 @@ curl -X POST http://localhost:8001/data \
 curl http://localhost:8001/data/<data_id>
 ```
 
-## Local UI (dev mode)
-```
-cd ui
-npm install
-npm run dev
-```
-Then open the printed URL (default `http://localhost:5173`). The UI will use the compose services on localhost unless you point it elsewhere.
-
 ## Utilities
 - `scripts/flush_db.sh`: truncate data and KMS Postgres tables (`data_records`, `crks`, `audit_logs`) while services are running to reset the playground quickly.
 To run the script, ensure services are up and execute:
-```./scripts/flush_db.sh
+```
+./scripts/flush_db.sh
 ```
 
 ## Explore the architecture
