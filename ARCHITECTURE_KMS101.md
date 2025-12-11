@@ -1,4 +1,4 @@
-# KMS101 – Project Context
+# KMS Playground – Project Context
 
 This repository contains a **Key Management Service (KMS)** proof of concept
 plus a **data service** that uses the KMS via envelope encryption.
@@ -64,7 +64,7 @@ The design uses **envelope encryption** with several layers:
      using a KDF (e.g., PBKDF2 or Argon2).
    - Stays only in memory after derivation.
 
-2. **Customer Root Key (CRK) / Key Encryption Key (KEK)**
+2. **Customer Root Key (CRK)**
    - One (or more) per customer/tenant.
    - Used to wrap (encrypt) **DEKs**.
    - Stored in the database **encrypted under the master key**.
@@ -88,9 +88,9 @@ The data service never sees MK or CRKs. It only sees:
 - Plaintext DEKs (in memory during operations)
 - Wrapped DEKs (stored in DB)
 
-## Planned KMS API (FastAPI)
+## KMS API (FastAPI)
 
-We plan to implement the following endpoints in `kms-service`:
+We implemented the following endpoints in `kms-service`:
 
 1. `POST /v1/customers/{customer_id}/root-keys`
    - Purpose: create or rotate a Customer Root Key (CRK). Current behavior: get-or-create per customer (reuses existing active CRK).
@@ -120,7 +120,7 @@ We plan to implement the following endpoints in `kms-service`:
    - Returns:
      - `plaintext_dek` (base64)
 
-## Planned Data Service API (FastAPI)
+## Data Service API (FastAPI)
 
 In `data-service`, we plan endpoints like:
 
@@ -148,7 +148,7 @@ In `data-service`, we plan endpoints like:
      - Use returned `plaintext_dek` with AES-GCM to decrypt ciphertext.
     - Response: plaintext data (or structured JSON).
 
-## Implementation Priorities
+## Implementation History / Next Steps
 
 1. **Plumbing first (done):**
    - Docker Compose with `kms-service`, `data-service`, `db`.
@@ -162,7 +162,7 @@ In `data-service`, we plan endpoints like:
    - SQLAlchemy models for CRKs (KMS) and encrypted data objects (data-service).
    - Stored in separate Postgres instances.
 
-4. ** Observability / logging (done):**
+4. **Observability / logging (done):**
    - Structured JSON logs with correlation IDs.
    - Recent events exposed via `/ _debug/logs` (dev only) and persisted audit tables in both DBs.
 
