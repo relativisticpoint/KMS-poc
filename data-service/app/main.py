@@ -47,7 +47,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from pythonjsonlogger import jsonlogger
 
 KMS_BASE_URL = os.getenv("KMS_BASE_URL", "http://kms-service:8000")
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://kms:kms@kms-data-db:5432/kms_poc_data")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://kms:kms@data-service-db:5432/kms_poc_data")
 
 app = FastAPI(title="Data Service")
 kms_client = httpx.Client(base_url=KMS_BASE_URL, timeout=5.0)

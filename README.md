@@ -1,99 +1,59 @@
-# KMS101 – KMS Proof of Concept
+# KMS Playground
 
-This project is a small proof of concept for a Key Management Service (KMS)
-and a data service that uses envelope encryption.
+This project demonstrates envelope encryption across a Key Management Service (KMS), a data service, and a UI to visualize the flow. The KMS issues and unwraps Data Encryption Keys (DEKs), while the data service encrypts/decrypts application data. Both services persist state in Postgres and expose debug endpoints for learning and testing. For a deeper architectural overview, see `ARCHITECTURE_KMS101.md`.
 
 ## Services
+- KMS Service (FastAPI, port 8000): manages CRKs/DEKs, AES-GCM wrapping, persisted CRKs in Postgres.
+- Data Service (FastAPI, port 8001): uses KMS for DEKs, AES-GCM encrypt/decrypt, persists encrypted records in Postgres.
+- UI (React/Vite, port 5173 via nginx): playground to exercise store/decrypt flows and view debug data/logs.
+- Postgres instances: one for KMS CRKs, one for data records (see schema details below).
 
-- KMS Service (FastAPI, port 8000)
-- Data Service (FastAPI, port 8001)
-- PostgreSQL databases (separate instances for KMS CRKs and data records)
-
-### Databases (schemas)
-- `kms-data-db` (`kms_poc_data`):
-  - `data_records`: `data_id` (PK), `customer_id`, `ciphertext`, `nonce`, `tag`, `wrapped_dek` (JSON with CRK metadata and wrapped key).
+### Database schemas
+- `data-service-db` (`kms_poc_data`):
+  - `data_records`: `data_id` (PK), `customer_id`, `ciphertext`, `nonce`, `tag`, `wrapped_dek` (JSON with CRK metadata + wrapped key).
+  - `audit_logs`: `id`, `ts`, `level`, `event`, `corr_id`, `customer_id`, `crk_id`, `data_id`, `detail`.
 - `kms-db` (`kms_poc_kms`):
-  - `crks`: `crk_id` (PK), `customer_id`, `version`, `status`, `algorithm`, `wrapped_crk` (CRK encrypted under MK).
+  - `crks`: `crk_id` (PK), `customer_id`, `version`, `status`, `algorithm`, `wrapped_crk`.
+  - `audit_logs`: `id`, `ts`, `level`, `event`, `corr_id`, `customer_id`, `crk_id`, `detail`.
 
-Current state:
-- KMS persists CRKs in its own Postgres instance, exposing endpoints to create/rotate CRKs and generate/unwrap DEKs using AES-GCM wrapping (real crypto). Per-customer CRK reuse (get-or-create) is enforced server-side.
-- Data service calls KMS, AES-GCM encrypts/decrypts data, and persists encrypted records in Postgres.
-- CORS is enabled on both services to support the browser UI at `ui/`.
-- UI is containerized (nginx) and available via docker-compose on port 5173.
-- Observability: both services emit structured JSON logs, keep recent events in an in-memory buffer, and expose `/ _debug/logs` for UI/inspection (dev only). Audit logs also persisted in Postgres.
-
-## Running
-
+## Run with Docker Compose
 From the project root:
+```
+docker compose up --build
+```
 
-    cd /Users/ahmedsami/Desktop/KMS101
-    docker compose up --build
+Verify(heathcheck):
+```
+curl http://localhost:8000/health
+curl http://localhost:8001/health
+```
 
-Then check:
+UI:
+- Open `http://localhost:5173`
+- Use the form to POST/GET `/data`; debug panes read from `/_debug/data`, `/_debug/crks`, `/_debug/logs` (dev only).
 
-    curl http://localhost:8000/health
-    curl http://localhost:8001/health
-
-Quick manual test (mock/in-memory flow):
-
+Manual API test (without UI):
+Issue a POST request to the data service to encrypt and store data, then a GET request to retrieve and decrypt it:
 ```
 curl -X POST http://localhost:8001/data \
   -H "Content-Type: application/json" \
   -d '{"customer_id": "cust-123", "data": "Hello KMS101"}'
+curl http://localhost:8001/data/<data_id>
 ```
 
-Response:
-
-```
-{"data_id": "<uuid>"}
-```
-
-Then retrieve:
-
-```
-curl http://localhost:8001/data/<uuid>
-```
-
-## UI (visualizer)
-
-A small React UI lives under `ui/` to visualize and exercise the flow.
-
+## Local UI (dev mode)
 ```
 cd ui
 npm install
 npm run dev
 ```
-
-Then open the printed URL (default `http://localhost:5173`) and use the form to POST/GET `/data`. Debug state panes read `/_debug/data` and `/_debug/crks` from the services (available in dev only).
-
-Running via Docker:
-
-```
-docker compose up --build
-```
-
-The UI will be served at `http://localhost:5173` from the `ui` service (nginx).
+Then open the printed URL (default `http://localhost:5173`). The UI will use the compose services on localhost unless you point it elsewhere.
 
 ## Utilities
+- `scripts/flush_db.sh`: truncate data and KMS Postgres tables (`data_records`, `crks`, `audit_logs`) while services are running to reset the playground quickly.
+To run the script, ensure services are up and execute:
+```./scripts/flush_db.sh
+```
 
-- `scripts/flush_db.sh` : truncate data and KMS Postgres tables (data_records, crks, audit_logs) while services are running to reset the playground quickly.
-
-## Notes for AI / Code Assistants
-
-Start by reading `ARCHITECTURE_KMS101.md`, then the per-service `agent.md` files at the top of each folder (`kms-service/agent.md`, `data-service/agent.md`, `ui/agent.md`) for quick summaries of responsibilities, APIs, and current state.
-
-If you're using an AI code assistant (Copilot, ChatGPT, etc.), please read
-or reference `ARCHITECTURE_KMS101.md` first. It describes:
-
-- The KMS vs data-service responsibilities
-- The key hierarchy (MK → CRK → DEK)
-- Planned APIs and crypto choices
-- Quick service overviews live in:
-  - `kms-service/agent.md`
-  - `data-service/agent.md`
-  - `ui/agent.md`
-
-Code suggestions should:
-- Keep KMS logic in `kms-service`
-- Keep data storage and encryption/decryption logic in `data-service`
-- Use the envelope encryption pattern (CRK wraps DEK, DEK encrypts data)
+## Explore the architecture
+For design details, key hierarchy, planned APIs, and schema notes, see `ARCHITECTURE_KMS101.md`.

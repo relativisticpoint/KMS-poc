@@ -1,4 +1,4 @@
-# KMS101 – Project Context for AI Assistants
+# KMS101 – Project Context
 
 This repository contains a **Key Management Service (KMS)** proof of concept
 plus a **data service** that uses the KMS via envelope encryption.
@@ -24,17 +24,17 @@ There are 3 main services:
      - Customer root keys (CRK / CMK / KEK)
      - Data encryption keys (DEK)
    - Provides an HTTP API for:
-     - Creating / rotating CRKs (currently get-or-create per customer)
-     - Generating DEKs wrapped under a CRK
-     - Unwrapping DEKs so the data service can decrypt data
+     - Creating CRKs (currently one CRK per customer) - /v1/customers/{customer_id}/root-keys
+     - Generating DEKs and wrapping them under a CRK - /v1/deks:generate
+     - Unwrapping DEKs so the data service can decrypt data - /v1/deks:unwrap
 
 2. **Data Service (FastAPI, port 8001)**
-   - Simulates an application that stores customer data.
+   - Simulates an application that stores customer data. (e.g., S3, database, etc.)
    - Does NOT manage long-term key material itself.
    - For each piece of data:
-     - Requests a DEK from the KMS.
+     - Requests a DEK from the KMS. - /v1/deks:generate
      - Encrypts data locally with that DEK using AES-GCM.
-     - Stores ciphertext + wrapped DEK + metadata in Postgres.
+     - Stores ciphertext + wrapped DEK + metadata in Postgres (database service).
 
 3. **Database (PostgreSQL, port 5432)**
    - Stores:
@@ -43,10 +43,10 @@ There are 3 main services:
    - KMS uses its own Postgres instance to store CRK metadata and wrapped CRKs.
 
 ### Database schemas
-- `kms-data-db` (`kms_poc_data`):
-  - `data_records`: `data_id` (PK), `customer_id`, `ciphertext`, `nonce`, `tag`, `wrapped_dek` (JSON: crk_id, crk_version, algorithm, wrapped_key).
+- `data-service-db` (`kms_poc_data`):
+  - `data_records`: `data_id`, `customer_id`, `ciphertext`, `nonce`, `tag`, `wrapped_dek` (JSON: crk_id, crk_version, algorithm, wrapped_key).
 - `kms-db` (`kms_poc_kms`):
-  - `crks`: `crk_id` (PK), `customer_id`, `version`, `status`, `algorithm`, `wrapped_crk` (CRK encrypted under MK).
+  - `crks`: `crk_id`, `customer_id`, `version`, `status`, `algorithm`, `wrapped_crk` (CRK encrypted under MK).
 
 Communication:
 
@@ -120,9 +120,6 @@ We plan to implement the following endpoints in `kms-service`:
    - Returns:
      - `plaintext_dek` (base64)
 
-In early iterations we may mock crypto (e.g., pass-through) and later
-swap in real AES-GCM using the `cryptography` library.
-
 ## Planned Data Service API (FastAPI)
 
 In `data-service`, we plan endpoints like:
@@ -165,35 +162,10 @@ In `data-service`, we plan endpoints like:
    - SQLAlchemy models for CRKs (KMS) and encrypted data objects (data-service).
    - Stored in separate Postgres instances.
 
-4. **Extras (if time):**
+4. ** Observability / logging (done):**
+   - Structured JSON logs with correlation IDs.
+   - Recent events exposed via `/ _debug/logs` (dev only) and persisted audit tables in both DBs.
+
+4. **Next Steps (to be done):**
    - Key rotation logic.
-   - Simple audit logging.
    - Basic auth/mTLS for KMS calls.
-
-## Coding Style / Expectations for AI
-
-When generating code in this repo, please:
-
-- Respect the service boundaries:
-  - All key-wrapping logic belongs in **kms-service**.
-  - Data encryption/decryption logic belongs in **data-service**, but
-    it should always obtain DEKs from KMS.
-- Use:
-  - FastAPI
-  - Pydantic models for request/response schemas
-  - The `cryptography` library for crypto (no custom crypto).
-- Prefer clear, explicit functions with docstrings describing:
-  - Which key level they operate on (MK, CRK, DEK).
-  - Whether they are doing wrap/unwrap or encrypt/decrypt data.
-- Quick service cheat-sheets:
-  - `kms-service/agent.md`
-  - `data-service/agent.md`
-  - `ui/agent.md`
-- Observability:
-  - Structured JSON logs (no secrets) with correlation IDs (`X-Correlation-ID` propagated from data-service to KMS).
-  - Recent events exposed via `/ _debug/logs` (dev only) using in-memory buffers.
-  - Audit persisted in Postgres (`audit_logs` table) in each service DB.
-
-The main objective is to demonstrate a clean envelope encryption
-implementation with a realistic microservice separation suitable for a
-cloud/cybersecurity portfolio project.

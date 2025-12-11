@@ -22,18 +22,18 @@ services:
       - "8001:8001"
     environment:
       - KMS_BASE_URL=http://kms-service:8000
-      - DATABASE_URL=postgresql+psycopg2://kms:kms@kms-data-db:5432/kms_poc_data
+      - DATABASE_URL=postgresql+psycopg2://kms:kms@data-service-db:5432/kms_poc_data
     depends_on:
       kms-service:
         condition: service_started
-      kms-data-db:
+      data-service-db:
         condition: service_healthy
     networks:
       - backend
 
-  kms-data-db:
+  data-service-db:
     image: postgres:16
-    container_name: kms-data-db
+    container_name: data-service-db
     environment:
       - POSTGRES_USER=kms
       - POSTGRES_PASSWORD=kms
