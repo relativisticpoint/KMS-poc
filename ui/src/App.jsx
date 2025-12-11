@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from "react";
-import { KmsFlow } from "./KmsFlow";
 import "./App.css";
 
 const apiDefaults = {
@@ -218,23 +217,8 @@ const App = () => {
             <h2>KMS</h2>
           </div>
           <div className="state-block">
-            <p className="subtitle">KMS CRKs (in-memory debug view)</p>
+            <p className="subtitle">KMS Database</p>
             <pre>{JSON.stringify(crkStore, null, 2)}</pre>
-          </div>
-          <div className="card-footer">
-            <h4>What the KMS does</h4>
-            <ul className="bullet-list">
-              <li>Owns the master key and customer root keys (CRKs).</li>
-              <li>
-                When storing data, data-service calls <code>POST /v1/deks:generate</code> to create
-                a DEK and wrap it under a CRK.
-              </li>
-              <li>
-                When decrypting, data-service calls <code>POST /v1/deks:unwrap</code> so it can
-                decrypt locally.
-              </li>
-              <li>The KMS never stores plaintext application data.</li>
-            </ul>
           </div>
         </section>
 
@@ -244,24 +228,11 @@ const App = () => {
             <h2>Database</h2>
           </div>
           <div className="state-block">
-            <p className="subtitle">Data store (encrypted objects)</p>
+            <p className="subtitle">Data store (e.g. S3 bucket)</p>
             <pre>{JSON.stringify(dataStore, null, 2)}</pre>
-          </div>
-          <div className="card-footer">
-            <h4>What the database stores</h4>
-            <ul className="bullet-list">
-              <li>Only encrypted data and wrapped DEKs.</li>
-              <li>No master key and no CRKs → cannot decrypt by itself.</li>
-              <li>
-                Each record has ciphertext + AEAD metadata (nonce, tag) and a wrapped DEK that only
-                the KMS can unwrap.
-              </li>
-            </ul>
           </div>
         </section>
       </div>
-
-      <KmsFlow />
     </main>
   );
 };
