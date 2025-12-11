@@ -21,6 +21,8 @@ const App = () => {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [lastCrkUsed, setLastCrkUsed] = useState(null);
   const [lastRequest, setLastRequest] = useState("");
+  const [kmsLogs, setKmsLogs] = useState([]);
+  const [dataLogs, setDataLogs] = useState([]);
 
   const fetchStores = async () => {
     try {
@@ -39,6 +41,33 @@ const App = () => {
     fetchStores();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const fetchKmsLogs = async () => {
+    try {
+      const logs = await fetch(`${kmsBaseUrl}/_debug/logs`).then((r) => r.json());
+      setKmsLogs(logs);
+    } catch {
+      // ignore log fetch errors for UI
+    }
+  };
+
+  const fetchDataLogs = async () => {
+    try {
+      const logs = await fetch(`${dataBaseUrl}/_debug/logs`).then((r) => r.json());
+      setDataLogs(logs);
+    } catch {
+      // ignore log fetch errors for UI
+    }
+  };
+
+  useEffect(() => {
+    fetchKmsLogs();
+    fetchDataLogs();
+    const id = setInterval(fetchKmsLogs, 8000);
+    const id2 = setInterval(fetchDataLogs, 8000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kmsBaseUrl, dataBaseUrl]);
 
   const handleEncrypt = async () => {
     setStatus("Encrypting...");
@@ -59,12 +88,14 @@ const App = () => {
       const body = await resp.json();
       setLatestId(body.data_id);
       setDecryptId((prev) => prev || body.data_id);
-      setStatus(`Stored data_id ${body.data_id}`);
+      setStatus("");
       if (body?.wrapped_dek?.crk_id) {
         setLastCrkUsed(body.wrapped_dek.crk_id);
       }
       setLastRequest("POST /data → POST /v1/deks:generate");
       await fetchStores();
+      await fetchKmsLogs();
+      await fetchDataLogs();
     } catch (err) {
       setStatus(err.message);
     } finally {
@@ -86,9 +117,11 @@ const App = () => {
       if (!resp.ok) {
         throw new Error(body.detail || `Fetch failed: ${resp.status}`);
       }
-      setStatus(`Decrypted (${targetId}): ${body.data}`);
+      setStatus(body.data);
       setLastRequest(`GET /data/${targetId} → POST /v1/deks:unwrap`);
       await fetchStores();
+      await fetchKmsLogs();
+      await fetchDataLogs();
     } catch (err) {
       setStatus(err.message);
     } finally {
@@ -123,20 +156,20 @@ const App = () => {
                 rows={2}
               />
             </label>
-            <label>
-              CRK ID (optional)
-              <input
-                value={crkId}
-                onChange={(e) => setCrkId(e.target.value)}
-                placeholder="auto-create if empty"
-              />
-            </label>
             <div className="accordion">
-              <button type="button" className="link-button fancy" onClick={() => setAdvancedOpen((o) => !o)}>
-                {advancedOpen ? "Hide advanced (URLs)" : "Show advanced (URLs)"}
+              <button type="button" className="link-button subtle" onClick={() => setAdvancedOpen((o) => !o)}>
+                {advancedOpen ? "Hide advanced parameters" : "Show advanced parameters"}
               </button>
               {advancedOpen && (
                 <div className="advanced-grid">
+                  <label>
+                    CRK ID (optional)
+                    <input
+                      value={crkId}
+                      onChange={(e) => setCrkId(e.target.value)}
+                      placeholder="auto-create if empty"
+                    />
+                  </label>
                   <label>
                     Data service URL
                     <input value={dataBaseUrl} onChange={(e) => setDataBaseUrl(e.target.value)} />
@@ -154,11 +187,6 @@ const App = () => {
               {loading ? "Working..." : "Store data (POST /data)"}
             </button>
           </div>
-          <p className="helper">
-            This calls POST <code>/data</code> on the data service, which calls the KMS to generate a
-            DEK and stores ciphertext + wrapped DEK in the database.
-          </p>
-
           <div className="divider">Decrypt data</div>
           <div className="single-input">
             <label>
@@ -188,27 +216,11 @@ const App = () => {
           </div>
           {status && (
             <div className="small-debug">
-              {status && (
-                <div className="status">
-                  <strong>Decrypted data:</strong> {status}
-                </div>
-              )}
+              <div className="status">
+                <strong>Decrypted data:</strong> {status}
+              </div>
             </div>
           )}
-          <div className="card-footer">
-            <h4>What the data service does</h4>
-            <ul className="bullet-list">
-              <li>Exposes <code>/data</code> to store and retrieve encrypted data.</li>
-              <li>
-                For storing, it calls the KMS to get a DEK, encrypts plaintext, and stores ciphertext
-                + wrapped DEK.
-              </li>
-              <li>
-                For decrypting, it loads the wrapped DEK and asks the KMS to unwrap it before
-                decrypting.
-              </li>
-            </ul>
-          </div>
         </section>
 
         <section className="card card-kms">
@@ -220,6 +232,17 @@ const App = () => {
             <p className="subtitle">KMS Database</p>
             <pre>{JSON.stringify(crkStore, null, 2)}</pre>
           </div>
+          <div className="state-block">
+            <p className="subtitle">KMS logs (raw JSON)</p>
+            {kmsLogs && kmsLogs.length > 0 ? (
+              <pre>{JSON.stringify(kmsLogs, null, 2)}</pre>
+            ) : (
+              <div className="faint">No recent KMS logs.</div>
+            )}
+          </div>
+          <button className="ghost small" type="button" onClick={fetchKmsLogs}>
+            Refresh logs
+          </button>
         </section>
 
         <section className="card card-db">
@@ -231,6 +254,17 @@ const App = () => {
             <p className="subtitle">Data store (e.g. S3 bucket)</p>
             <pre>{JSON.stringify(dataStore, null, 2)}</pre>
           </div>
+          <div className="state-block">
+            <p className="subtitle">Data logs (raw JSON)</p>
+            {dataLogs && dataLogs.length > 0 ? (
+              <pre>{JSON.stringify(dataLogs, null, 2)}</pre>
+            ) : (
+              <div className="faint">No recent data logs.</div>
+            )}
+          </div>
+          <button className="ghost small" type="button" onClick={fetchDataLogs}>
+            Refresh logs
+          </button>
         </section>
       </div>
     </main>

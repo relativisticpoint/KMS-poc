@@ -245,7 +245,18 @@ def store_data(payload: StoreDataRequest, request: Request) -> StoreDataResponse
     # Route: accepts StoreDataRequest with customer_id/data/crk_id; ensures CRK, gets DEK from KMS, AES-GCM encrypts data, stores in DB, returns data_id.
     corr_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
     crk_id = _ensure_crk(payload.customer_id, payload.crk_id, corr_id)
+    with get_session() as session:
+        _persist_audit(
+            session,
+            event="data.dek.requested",
+            corr_id=corr_id,
+            customer_id=payload.customer_id,
+            crk_id=crk_id,
+        )
+        session.commit()
+    audit("data.dek.requested", corr_id=corr_id, customer_id=payload.customer_id, crk_id=crk_id)
     dek_bytes, wrapped_dek = _generate_dek(payload.customer_id, crk_id, corr_id)
+    audit("data.dek.received", corr_id=corr_id, customer_id=payload.customer_id, crk_id=crk_id)
 
     ciphertext, nonce, tag = encrypt_data(payload.data.encode("utf-8"), dek_bytes)
 
