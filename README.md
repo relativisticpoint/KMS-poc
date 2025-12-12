@@ -42,6 +42,7 @@ To run the script, ensure services are up and execute:
 ```
 ./scripts/flush_db.sh
 ```
+- Runtime flush endpoints (public in the playground): `POST /data/flush` and `POST /kms/flush` via the proxy reset app data/keys and in-memory audit buffers without restarting containers.
 
 ## Explore the architecture
 For design details, key hierarchy, planned APIs, and schema notes, see `ARCHITECTURE_KMS101.md`.

@@ -12,6 +12,7 @@ Current implementation status:
 - Real crypto is in place; rotation logic and auth/hardening remain to be added.
 - Services run behind an nginx proxy; only port 80 is exposed. UI is served via nginx; backend ports are internal.
 - Observability: structured JSON logs with correlation IDs; recent events exposed via `/ _debug/logs` (dev only) and persisted audit tables in both DBs.
+- Reset hooks: both services expose `POST /kms/flush` and `POST /data/flush` (via the proxy) to wipe records/audit logs for a clean playground session.
 
 ## Big Picture
 

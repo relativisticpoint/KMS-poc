@@ -41,13 +41,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Request
 from pydantic import BaseModel, Field
-from sqlalchemy import JSON, Column, String, create_engine
+from sqlalchemy import JSON, Column, String, create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
 from pythonjsonlogger import jsonlogger
 
 KMS_BASE_URL = os.getenv("KMS_BASE_URL", "http://kms-service:8000")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://kms:kms@data-service-db:5432/kms_poc_data")
+ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "http://localhost")
 
 app = FastAPI(title="Data Service")
 kms_client = httpx.Client(base_url=KMS_BASE_URL, timeout=5.0)
@@ -143,7 +144,7 @@ def _persist_audit(
 #! To update before production: allow only KMS service origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[ALLOWED_ORIGIN],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -352,3 +353,13 @@ def debug_dump_data_store() -> dict:
 @app.get("/_debug/logs")
 def debug_logs() -> List[Dict]:
     return list(AuditLogBuffer)
+
+
+# Public flush: resets data records and audit logs
+@app.post("/flush")
+def flush_playground() -> dict:
+    AuditLogBuffer.clear()
+    with get_session() as session:
+        session.execute(text("TRUNCATE data_records, audit_logs RESTART IDENTITY;"))
+        session.commit()
+    return {"status": "flushed"}

@@ -23,8 +23,12 @@ const App = () => {
   const [lastRequest, setLastRequest] = useState("");
   const [kmsLogs, setKmsLogs] = useState([]);
   const [dataLogs, setDataLogs] = useState([]);
+  const [decryptStatus, setDecryptStatus] = useState("");
+  const [resetStatus, setResetStatus] = useState("");
+  const [resetting, setResetting] = useState(false);
 
   const fetchStores = async () => {
+    setResetStatus("");
     try {
       const [dataRes, crkRes] = await Promise.all([
         fetch(`${dataBaseUrl}/_debug/data`).then((r) => r.json()),
@@ -43,6 +47,7 @@ const App = () => {
   }, []);
 
   const fetchKmsLogs = async () => {
+    setResetStatus("");
     try {
       const logs = await fetch(`${kmsBaseUrl}/_debug/logs`).then((r) => r.json());
       setKmsLogs(logs);
@@ -52,6 +57,7 @@ const App = () => {
   };
 
   const fetchDataLogs = async () => {
+    setResetStatus("");
     try {
       const logs = await fetch(`${dataBaseUrl}/_debug/logs`).then((r) => r.json());
       setDataLogs(logs);
@@ -70,7 +76,8 @@ const App = () => {
   }, [kmsBaseUrl, dataBaseUrl]);
 
   const handleEncrypt = async () => {
-    setStatus("Encrypting...");
+    setResetStatus("");
+    setDecryptStatus("");
     setLoading(true);
     try {
       const resp = await fetch(`${dataBaseUrl}/data`, {
@@ -88,7 +95,6 @@ const App = () => {
       const body = await resp.json();
       setLatestId(body.data_id);
       setDecryptId((prev) => prev || body.data_id);
-      setStatus("");
       if (body?.wrapped_dek?.crk_id) {
         setLastCrkUsed(body.wrapped_dek.crk_id);
       }
@@ -97,19 +103,20 @@ const App = () => {
       await fetchKmsLogs();
       await fetchDataLogs();
     } catch (err) {
-      setStatus(err.message);
+      setDecryptStatus(err.message);
     } finally {
       setLoading(false);
     }
   };
 
   const handleDecrypt = async () => {
+    setResetStatus("");
     const targetId = decryptId || latestId;
     if (!targetId) {
-      setStatus("Provide a data_id or store data first.");
+      setDecryptStatus("Provide a data_id or store data first.");
       return;
     }
-    setStatus("Decrypting...");
+    setDecryptStatus("Decrypting...");
     setLoading(true);
     try {
       const resp = await fetch(`${dataBaseUrl}/data/${targetId}`);
@@ -117,15 +124,38 @@ const App = () => {
       if (!resp.ok) {
         throw new Error(body.detail || `Fetch failed: ${resp.status}`);
       }
-      setStatus(body.data);
+      setDecryptStatus(body.data);
       setLastRequest(`GET /data/${targetId} → POST /v1/deks:unwrap`);
       await fetchStores();
       await fetchKmsLogs();
       await fetchDataLogs();
     } catch (err) {
-      setStatus(err.message);
+      setDecryptStatus(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleReset = async () => {
+    setResetting(true);
+    setResetStatus("");
+    try {
+      await Promise.all([
+        fetch(`${dataBaseUrl}/flush`, { method: "POST" }),
+        fetch(`${kmsBaseUrl}/flush`, { method: "POST" }),
+      ]);
+      setLatestId("");
+      setDecryptId("");
+      setCrkId("");
+      setLastCrkUsed(null);
+      setResetStatus("Playground reset");
+      await fetchStores();
+      await fetchKmsLogs();
+      await fetchDataLogs();
+    } catch (err) {
+      setResetStatus(`Reset failed: ${err.message}`);
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -214,10 +244,29 @@ const App = () => {
               Refresh debug state
             </button>
           </div>
-          {status && (
+          {decryptStatus && (
             <div className="small-debug">
               <div className="status">
-                <strong>Decrypted data:</strong> {status}
+                <strong>Decrypted data:</strong> {decryptStatus}
+              </div>
+            </div>
+          )}
+          <div className="divider">Reset playground</div>
+          <div className="actions">
+            <button
+              className="danger"
+              type="button"
+              onClick={handleReset}
+              disabled={resetting || loading}
+            >
+              {resetting ? "Resetting..." : "Reset playground"}
+            </button>
+          </div>
+          <p className="helper">Clears KMS keys, data, and logs.</p>
+          {resetStatus && (
+            <div className="small-debug">
+              <div className="status">
+                <strong>Reset:</strong> {resetStatus}
               </div>
             </div>
           )}
@@ -255,7 +304,7 @@ const App = () => {
             <pre>{JSON.stringify(dataStore, null, 2)}</pre>
           </div>
           <div className="state-block">
-            <p className="subtitle">Data logs (raw JSON)</p>
+            <p className="subtitle">Data Service logs (raw JSON)</p>
             {dataLogs && dataLogs.length > 0 ? (
               <pre>{JSON.stringify(dataLogs, null, 2)}</pre>
             ) : (

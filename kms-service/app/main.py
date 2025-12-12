@@ -40,7 +40,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import Column, Integer, String, create_engine, JSON
+from sqlalchemy import Column, Integer, String, create_engine, JSON, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
 from pythonjsonlogger import jsonlogger
@@ -48,13 +48,14 @@ from pythonjsonlogger import jsonlogger
 DATABASE_URL = os.getenv(
     "KMS_DATABASE_URL", "postgresql+psycopg2://kms:kms@kms-db:5432/kms_poc_kms"
 )
+ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "http://localhost")
 
 app = FastAPI(title="KMS Service")
 
 #! To update before production: allow only data service origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[ALLOWED_ORIGIN],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -392,3 +393,13 @@ def debug_dump_crks() -> dict:
 @app.get("/_debug/logs")
 def debug_logs() -> List[Dict]:
     return list(AuditLogBuffer)
+
+
+# Public flush: resets CRKs and audit logs (playground reset)
+@app.post("/flush")
+def flush_playground() -> dict:
+    AuditLogBuffer.clear()
+    with get_session() as session:
+        session.execute(text("TRUNCATE crks, audit_logs RESTART IDENTITY;"))
+        session.commit()
+    return {"status": "flushed"}
