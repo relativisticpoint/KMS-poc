@@ -10,14 +10,14 @@ Current implementation status:
 - KMS FastAPI persists CRKs in its own Postgres instance, implements CRK create/rotate and DEK generate/unwrap endpoints using AES-GCM wrapping (real crypto). Per-customer CRK reuse is enforced (get-or-create).
 - Data service FastAPI calls KMS, performs AES-GCM data encryption/decryption, and stores records in Postgres.
 - Real crypto is in place; rotation logic and auth/hardening remain to be added.
-- CORS is enabled to support the browser UI that calls the services directly; UI is containerized and served via docker-compose at port 5173.
+- Services run behind an nginx proxy; only port 80 is exposed. UI is served via nginx; backend ports are internal.
 - Observability: structured JSON logs with correlation IDs; recent events exposed via `/ _debug/logs` (dev only) and persisted audit tables in both DBs.
 
 ## Big Picture
 
 There are 3 main services:
 
-1. **KMS Service (FastAPI, port 8000)**
+1. **KMS Service (FastAPI, internal)**
    - Manages key material and performs cryptographic operations.
    - Owns all logic around:
      - Master key (MK)
@@ -28,7 +28,7 @@ There are 3 main services:
      - Generating DEKs and wrapping them under a CRK - /v1/deks:generate
      - Unwrapping DEKs so the data service can decrypt data - /v1/deks:unwrap
 
-2. **Data Service (FastAPI, port 8001)**
+2. **Data Service (FastAPI, internal)**
    - Simulates an application that stores customer data. (e.g., S3, database, etc.)
    - Does NOT manage long-term key material itself.
    - For each piece of data:
@@ -36,7 +36,7 @@ There are 3 main services:
      - Encrypts data locally with that DEK using AES-GCM.
      - Stores ciphertext + wrapped DEK + metadata in Postgres (database service).
 
-3. **Database (PostgreSQL, port 5432)**
+3. **Database (PostgreSQL, internal)**
    - Stores:
      - Encrypted data records (ciphertext, nonce, tag, etc.)
      - Wrapped DEKs and key metadata
