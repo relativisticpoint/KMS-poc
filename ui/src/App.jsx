@@ -255,7 +255,7 @@ const App = () => {
             <pre>{JSON.stringify(dataStore, null, 2)}</pre>
           </div>
           <div className="state-block">
-            <p className="subtitle">Data logs (raw JSON)</p>
+            <p className="subtitle">Data Service logs (raw JSON)</p>
             {dataLogs && dataLogs.length > 0 ? (
               <pre>{JSON.stringify(dataLogs, null, 2)}</pre>
             ) : (
