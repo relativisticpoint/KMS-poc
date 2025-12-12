@@ -4,8 +4,6 @@ services:
   kms-service:
     build: ./kms-service
     container_name: kms-service
-    ports:
-      - "8000:8000"
     environment:
       - MASTER_KEY_PASSPHRASE=dev-master-pass
       - KMS_DATABASE_URL=postgresql+psycopg2://kms:kms@kms-db:5432/kms_poc_kms
@@ -18,8 +16,6 @@ services:
   data-service:
     build: ./data-service
     container_name: data-service
-    ports:
-      - "8001:8001"
     environment:
       - KMS_BASE_URL=http://kms-service:8000
       - DATABASE_URL=postgresql+psycopg2://kms:kms@data-service-db:5432/kms_poc_data
@@ -38,8 +34,6 @@ services:
       - POSTGRES_USER=kms
       - POSTGRES_PASSWORD=kms
       - POSTGRES_DB=kms_poc_data
-    ports:
-      - "5432:5432"
     volumes:
       - db_data_data:/var/lib/postgresql/data
     networks:
@@ -57,8 +51,6 @@ services:
       - POSTGRES_USER=kms
       - POSTGRES_PASSWORD=kms
       - POSTGRES_DB=kms_poc_kms
-    ports:
-      - "55432:5432"
     volumes:
       - db_kms_data:/var/lib/postgresql/data
     networks:
@@ -72,11 +64,23 @@ services:
   ui:
     build: ./ui
     container_name: kms-ui
-    ports:
-      - "5173:80"
     depends_on:
       - kms-service
       - data-service
+    networks:
+      - backend
+
+  nginx-proxy:
+    image: nginx:alpine
+    container_name: kms-proxy
+    depends_on:
+      - ui
+      - kms-service
+      - data-service
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     networks:
       - backend
 
