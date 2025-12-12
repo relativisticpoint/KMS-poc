@@ -175,6 +175,11 @@ button.small {
   font-size: 12px;
 }
 
+button.danger {
+  background: #dc2626;
+  box-shadow: 0 8px 18px rgba(220, 38, 38, 0.25);
+}
+
 button:disabled {
   opacity: 0.7;
   cursor: not-allowed;
