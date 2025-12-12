@@ -41,7 +41,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Request
 from pydantic import BaseModel, Field
-from sqlalchemy import JSON, Column, String, create_engine
+from sqlalchemy import JSON, Column, String, create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
 from pythonjsonlogger import jsonlogger
@@ -353,3 +353,13 @@ def debug_dump_data_store() -> dict:
 @app.get("/_debug/logs")
 def debug_logs() -> List[Dict]:
     return list(AuditLogBuffer)
+
+
+# Public flush: resets data records and audit logs
+@app.post("/flush")
+def flush_playground() -> dict:
+    AuditLogBuffer.clear()
+    with get_session() as session:
+        session.execute(text("TRUNCATE data_records, audit_logs RESTART IDENTITY;"))
+        session.commit()
+    return {"status": "flushed"}

@@ -40,7 +40,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import Column, Integer, String, create_engine, JSON
+from sqlalchemy import Column, Integer, String, create_engine, JSON, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
 from pythonjsonlogger import jsonlogger
@@ -393,3 +393,13 @@ def debug_dump_crks() -> dict:
 @app.get("/_debug/logs")
 def debug_logs() -> List[Dict]:
     return list(AuditLogBuffer)
+
+
+# Public flush: resets CRKs and audit logs (playground reset)
+@app.post("/flush")
+def flush_playground() -> dict:
+    AuditLogBuffer.clear()
+    with get_session() as session:
+        session.execute(text("TRUNCATE crks, audit_logs RESTART IDENTITY;"))
+        session.commit()
+    return {"status": "flushed"}
