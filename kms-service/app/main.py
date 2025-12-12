@@ -48,13 +48,14 @@ from pythonjsonlogger import jsonlogger
 DATABASE_URL = os.getenv(
     "KMS_DATABASE_URL", "postgresql+psycopg2://kms:kms@kms-db:5432/kms_poc_kms"
 )
+ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "http://localhost")
 
 app = FastAPI(title="KMS Service")
 
 #! To update before production: allow only data service origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[ALLOWED_ORIGIN],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

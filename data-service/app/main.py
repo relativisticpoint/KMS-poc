@@ -48,6 +48,7 @@ from pythonjsonlogger import jsonlogger
 
 KMS_BASE_URL = os.getenv("KMS_BASE_URL", "http://kms-service:8000")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://kms:kms@data-service-db:5432/kms_poc_data")
+ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "http://localhost")
 
 app = FastAPI(title="Data Service")
 kms_client = httpx.Client(base_url=KMS_BASE_URL, timeout=5.0)
@@ -143,7 +144,7 @@ def _persist_audit(
 #! To update before production: allow only KMS service origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[ALLOWED_ORIGIN],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
