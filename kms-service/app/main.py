@@ -49,6 +49,7 @@ DATABASE_URL = os.getenv(
     "KMS_DATABASE_URL", "postgresql+psycopg2://kms:kms@kms-db:5432/kms_poc_kms"
 )
 ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "http://localhost")
+SESSION_HEADER = "X-Playground-Id"
 
 app = FastAPI(title="KMS Service")
 
@@ -77,8 +78,8 @@ logger.handlers = [handler]
 AuditLogBuffer: Deque[Dict] = deque(maxlen=100)
 
 
-def audit(event: str, level: str = "INFO", **fields) -> None:
-    payload = {"event": event, "level": level, **fields}
+def audit(event: str, level: str = "INFO", session_id: Optional[str] = None, **fields) -> None:
+    payload = {"event": event, "level": level, "session_id": session_id, **fields}
     AuditLogBuffer.append(payload)
     logger.log(logging.getLevelName(level), event, extra=fields)
 
@@ -87,6 +88,7 @@ class CRKModel(Base):
     __tablename__ = "crks"
     crk_id = Column(String, primary_key=True, index=True)
     customer_id = Column(String, index=True, nullable=False)
+    session_id = Column(String, index=True, nullable=True)
     version = Column(Integer, nullable=False)
     status = Column(String, nullable=False)
     algorithm = Column(String, nullable=False)
@@ -102,6 +104,7 @@ class AuditLog(Base):
     corr_id = Column(String, nullable=True)
     customer_id = Column(String, nullable=True)
     crk_id = Column(String, nullable=True)
+    session_id = Column(String, nullable=True)
     detail = Column(JSON, nullable=True)
 
 
@@ -109,6 +112,10 @@ def _ensure_tables_with_retry(retries: int = 10, delay: float = 1.0) -> None:
     for attempt in range(retries):
         try:
             Base.metadata.create_all(bind=engine)
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE crks ADD COLUMN IF NOT EXISTS session_id VARCHAR"))
+                conn.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS session_id VARCHAR"))
+                conn.commit()
             return
         except Exception:
             if attempt == retries - 1:
@@ -134,6 +141,7 @@ def _persist_audit(
     corr_id: Optional[str] = None,
     customer_id: Optional[str] = None,
     crk_id: Optional[str] = None,
+    session_id: Optional[str] = None,
     detail: Optional[dict] = None,
 ) -> None:
     entry = AuditLog(
@@ -144,6 +152,7 @@ def _persist_audit(
         corr_id=corr_id,
         customer_id=customer_id,
         crk_id=crk_id,
+        session_id=session_id,
         detail=detail or {},
     )
     session.add(entry)
@@ -220,6 +229,15 @@ def aes_gcm_decrypt(key: bytes, wrapped: str) -> bytes:
     return aesgcm.decrypt(nonce, ciphertext, None)
 
 
+# --- Helpers --------------------------------------------------------------
+
+def require_session_id(request: Request) -> str:
+    session_id = request.headers.get(SESSION_HEADER)
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Missing session id")
+    return session_id
+
+
 # --- Routes ---------------------------------------------------------------
 
 @app.get("/health")
@@ -231,11 +249,12 @@ def health() -> dict:
 @app.post("/v1/customers/{customer_id}/root-keys", response_model=CreateCRKResponse)
 def create_root_key(customer_id: str, request: Request) -> CreateCRKResponse:
     # Route: get-or-create CRK for customer_id; reuses existing active CRK, otherwise creates and wraps with MK.
+    session_id = require_session_id(request)
     corr_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
     with get_session() as session:
         existing = (
             session.query(CRKModel)
-            .filter(CRKModel.customer_id == customer_id)
+            .filter(CRKModel.customer_id == customer_id, CRKModel.session_id == session_id)
             .order_by(CRKModel.version.desc())
             .first()
         )
@@ -246,11 +265,12 @@ def create_root_key(customer_id: str, request: Request) -> CreateCRKResponse:
                 corr_id=corr_id,
                 customer_id=existing.customer_id,
                 crk_id=existing.crk_id,
+                session_id=session_id,
                 detail={"version": existing.version},
             )
             session.commit()
             #! Audit log
-            audit("kms.crk.get", corr_id=corr_id, customer_id=existing.customer_id, crk_id=existing.crk_id, crk_version=existing.version) 
+            audit("kms.crk.get", corr_id=corr_id, customer_id=existing.customer_id, crk_id=existing.crk_id, crk_version=existing.version, session_id=session_id) 
             return CreateCRKResponse(
                 crk_id=existing.crk_id,
                 customer_id=existing.customer_id,
@@ -269,6 +289,7 @@ def create_root_key(customer_id: str, request: Request) -> CreateCRKResponse:
         record = CRKModel(
             crk_id=crk_id,
             customer_id=customer_id,
+            session_id=session_id,
             version=version,
             status="active",
             algorithm="AES256",
@@ -281,11 +302,12 @@ def create_root_key(customer_id: str, request: Request) -> CreateCRKResponse:
             corr_id=corr_id,
             customer_id=customer_id,
             crk_id=crk_id,
+            session_id=session_id,
             detail={"version": version},
         )
         session.commit()
         #! Audit log
-        audit("kms.crk.created", corr_id=corr_id, customer_id=customer_id, crk_id=crk_id, crk_version=version)
+        audit("kms.crk.created", corr_id=corr_id, customer_id=customer_id, crk_id=crk_id, crk_version=version, session_id=session_id)
 
         return CreateCRKResponse(
             crk_id=crk_id,
@@ -296,10 +318,14 @@ def create_root_key(customer_id: str, request: Request) -> CreateCRKResponse:
         )
 
 
-def _load_crk(crk_id: str) -> CRKModel:
+def _load_crk(crk_id: str, session_id: str) -> CRKModel:
     # Helper: fetch CRK record by crk_id or raise 404.
     with get_session() as session:
-        record = session.get(CRKModel, crk_id)
+        record = (
+            session.query(CRKModel)
+            .filter(CRKModel.crk_id == crk_id, CRKModel.session_id == session_id)
+            .first()
+        )
         if not record:
             raise HTTPException(status_code=404, detail="CRK not found")
         return record
@@ -308,8 +334,9 @@ def _load_crk(crk_id: str) -> CRKModel:
 @app.post("/v1/deks:generate", response_model=GenerateDEKResponse)
 def generate_dek(payload: GenerateDEKRequest, request: Request) -> GenerateDEKResponse:
     # Route: given payload (customer_id, crk_id, dek_algorithm, data_context), unwraps CRK with MK, generates DEK, wraps with CRK, returns plaintext+wrapped.
+    session_id = require_session_id(request)
     corr_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
-    record = _load_crk(payload.crk_id)
+    record = _load_crk(payload.crk_id, session_id)
     mk = derive_master_key()
     try:
         crk_bytes = aes_gcm_decrypt(mk, record.wrapped_crk)
@@ -333,18 +360,20 @@ def generate_dek(payload: GenerateDEKRequest, request: Request) -> GenerateDEKRe
             corr_id=corr_id,
             customer_id=payload.customer_id,
             crk_id=record.crk_id,
+            session_id=session_id,
             detail={"crk_version": record.version},
         )
         session.commit()
-    audit("kms.dek.generate", corr_id=corr_id, customer_id=payload.customer_id, crk_id=record.crk_id, crk_version=record.version)
+    audit("kms.dek.generate", corr_id=corr_id, customer_id=payload.customer_id, crk_id=record.crk_id, crk_version=record.version, session_id=session_id)
     return GenerateDEKResponse(plaintext_dek=plaintext_dek_b64, wrapped_dek=wrapped)
 
 
 @app.post("/v1/deks:unwrap", response_model=UnwrapDEKResponse)
 def unwrap_dek(payload: UnwrapDEKRequest, request: Request) -> UnwrapDEKResponse:
     # Route: given wrapped_dek payload, unwraps CRK with MK then unwraps DEK with CRK; returns plaintext DEK.
+    session_id = require_session_id(request)
     corr_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
-    record = _load_crk(payload.wrapped_dek.crk_id)
+    record = _load_crk(payload.wrapped_dek.crk_id, session_id)
     mk = derive_master_key()
     try:
         crk_bytes = aes_gcm_decrypt(mk, record.wrapped_crk)
@@ -363,23 +392,28 @@ def unwrap_dek(payload: UnwrapDEKRequest, request: Request) -> UnwrapDEKResponse
             corr_id=corr_id,
             customer_id=record.customer_id,
             crk_id=record.crk_id,
+            session_id=session_id,
             detail={"crk_version": record.version},
         )
         session.commit()
-    audit("kms.dek.unwrap", corr_id=corr_id, customer_id=record.customer_id, crk_id=record.crk_id, crk_version=record.version)
+    audit("kms.dek.unwrap", corr_id=corr_id, customer_id=record.customer_id, crk_id=record.crk_id, crk_version=record.version, session_id=session_id)
     return UnwrapDEKResponse(plaintext_dek=base64.b64encode(dek_bytes).decode("utf-8"))
 
 
 # DEBUG ONLY: remove before production; dumps in-memory CRK store
 @app.get("/_debug/crks")
-def debug_dump_crks() -> dict:
+def debug_dump_crks(request: Request) -> dict:
     # Route: returns raw CRKs including wrapped CRKs for troubleshooting; not for production use.
+    session_id = require_session_id(request)
     with get_session() as session:
-        records = session.query(CRKModel).all()
+        records = session.query(CRKModel).filter(
+            (CRKModel.session_id == session_id) | (CRKModel.session_id.is_(None))
+        ).all()
         return {
             r.crk_id: {
                 "crk_id": r.crk_id,
                 "customer_id": r.customer_id,
+                "session_id": r.session_id,
                 "version": r.version,
                 "status": r.status,
                 "algorithm": r.algorithm,
@@ -391,15 +425,22 @@ def debug_dump_crks() -> dict:
 
 # DEBUG ONLY: recent audit logs
 @app.get("/_debug/logs")
-def debug_logs() -> List[Dict]:
-    return list(AuditLogBuffer)
+def debug_logs(request: Request) -> List[Dict]:
+    session_id = require_session_id(request)
+    return [entry for entry in AuditLogBuffer if entry.get("session_id") in (None, session_id)]
 
 
 # Public flush: resets CRKs and audit logs (playground reset)
 @app.post("/flush")
-def flush_playground() -> dict:
+def flush_playground(request: Request) -> dict:
+    session_id = require_session_id(request)
     AuditLogBuffer.clear()
     with get_session() as session:
-        session.execute(text("TRUNCATE crks, audit_logs RESTART IDENTITY;"))
+        session.execute(
+            text("DELETE FROM crks WHERE session_id = :sid OR session_id IS NULL"), {"sid": session_id}
+        )
+        session.execute(
+            text("DELETE FROM audit_logs WHERE session_id = :sid OR session_id IS NULL"), {"sid": session_id}
+        )
         session.commit()
     return {"status": "flushed"}

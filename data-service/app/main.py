@@ -41,7 +41,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Request
 from pydantic import BaseModel, Field
-from sqlalchemy import JSON, Column, String, create_engine, text
+from sqlalchemy import JSON, Column, String, create_engine, text, or_
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
 from pythonjsonlogger import jsonlogger
@@ -49,6 +49,7 @@ from pythonjsonlogger import jsonlogger
 KMS_BASE_URL = os.getenv("KMS_BASE_URL", "http://kms-service:8000")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://kms:kms@data-service-db:5432/kms_poc_data")
 ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "http://localhost")
+SESSION_HEADER = "X-Playground-Id"
 
 app = FastAPI(title="Data Service")
 kms_client = httpx.Client(base_url=KMS_BASE_URL, timeout=5.0)
@@ -68,8 +69,8 @@ logger.handlers = [handler]
 AuditLogBuffer: Deque[Dict] = deque(maxlen=100)
 
 
-def audit(event: str, level: str = "INFO", **fields) -> None:
-    payload = {"event": event, "level": level, **fields}
+def audit(event: str, level: str = "INFO", session_id: Optional[str] = None, **fields) -> None:
+    payload = {"event": event, "level": level, "session_id": session_id, **fields}
     AuditLogBuffer.append(payload)
     logger.log(logging.getLevelName(level), event, extra=fields)
 
@@ -78,6 +79,7 @@ class DataRecord(Base):
     __tablename__ = "data_records"
     data_id = Column(String, primary_key=True, index=True)
     customer_id = Column(String, index=True, nullable=False)
+    session_id = Column(String, index=True, nullable=True)
     ciphertext = Column(String, nullable=False)
     nonce = Column(String, nullable=False)
     tag = Column(String, nullable=False)
@@ -94,6 +96,7 @@ class AuditLog(Base):
     customer_id = Column(String, nullable=True)
     crk_id = Column(String, nullable=True)
     data_id = Column(String, nullable=True)
+    session_id = Column(String, nullable=True)
     detail = Column(JSON, nullable=True)
 
 
@@ -101,6 +104,10 @@ def _ensure_tables_with_retry(retries: int = 10, delay: float = 1.0) -> None:
     for attempt in range(retries):
         try:
             Base.metadata.create_all(bind=engine)
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE data_records ADD COLUMN IF NOT EXISTS session_id VARCHAR"))
+                conn.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS session_id VARCHAR"))
+                conn.commit()
             return
         except Exception:
             if attempt == retries - 1:
@@ -127,6 +134,7 @@ def _persist_audit(
     customer_id: Optional[str] = None,
     crk_id: Optional[str] = None,
     data_id: Optional[str] = None,
+    session_id: Optional[str] = None,
     detail: Optional[dict] = None,
 ) -> None:
     entry = AuditLog(
@@ -138,6 +146,7 @@ def _persist_audit(
         customer_id=customer_id,
         crk_id=crk_id,
         data_id=data_id,
+        session_id=session_id,
         detail=detail or {},
     )
     session.add(entry)
@@ -195,25 +204,32 @@ def decrypt_data(ciphertext_b64: str, nonce_b64: str, tag_b64: str, dek: bytes) 
 
 # --- Helpers --------------------------------------------------------------
 
-def _ensure_crk(customer_id: str, crk_id: Optional[str], corr_id: str) -> str:
+def require_session_id(request: Request) -> str:
+    session_id = request.headers.get(SESSION_HEADER)
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Missing session id")
+    return session_id
+
+
+def _ensure_crk(customer_id: str, crk_id: Optional[str], corr_id: str, session_id: str) -> str:
     # Helper: use provided crk_id or create a new CRK via KMS for customer_id; returns crk_id.
     if crk_id:
         return crk_id
-    headers = {"X-Correlation-ID": corr_id}
+    headers = {"X-Correlation-ID": corr_id, SESSION_HEADER: session_id}
     resp = kms_client.post(f"/v1/customers/{customer_id}/root-keys", headers=headers)
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to create CRK via KMS")
     return resp.json()["crk_id"]
 
 
-def _generate_dek(customer_id: str, crk_id: str, corr_id: str) -> tuple[bytes, dict]:
+def _generate_dek(customer_id: str, crk_id: str, corr_id: str, session_id: str) -> tuple[bytes, dict]:
     # Helper: call KMS /v1/deks:generate with customer_id and crk_id; returns plaintext DEK bytes and wrapped_dek dict.
     payload = {
         "customer_id": customer_id,
         "crk_id": crk_id,
         "dek_algorithm": "AES256",
     }
-    headers = {"X-Correlation-ID": corr_id}
+    headers = {"X-Correlation-ID": corr_id, SESSION_HEADER: session_id}
     resp = kms_client.post("/v1/deks:generate", json=payload, headers=headers)
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to generate DEK via KMS")
@@ -223,9 +239,9 @@ def _generate_dek(customer_id: str, crk_id: str, corr_id: str) -> tuple[bytes, d
     return dek_plaintext, body["wrapped_dek"]
 
 
-def _unwrap_dek(wrapped_dek: dict, corr_id: str) -> bytes:
+def _unwrap_dek(wrapped_dek: dict, corr_id: str, session_id: str) -> bytes:
     # Helper: call KMS /v1/deks:unwrap with wrapped_dek; returns plaintext DEK bytes.
-    headers = {"X-Correlation-ID": corr_id}
+    headers = {"X-Correlation-ID": corr_id, SESSION_HEADER: session_id}
     resp = kms_client.post("/v1/deks:unwrap", json={"wrapped_dek": wrapped_dek}, headers=headers)
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Failed to unwrap DEK via KMS")
@@ -244,8 +260,9 @@ def health() -> dict:
 @app.post("/data", response_model=StoreDataResponse)
 def store_data(payload: StoreDataRequest, request: Request) -> StoreDataResponse:
     # Route: accepts StoreDataRequest with customer_id/data/crk_id; ensures CRK, gets DEK from KMS, AES-GCM encrypts data, stores in DB, returns data_id.
+    session_id = require_session_id(request)
     corr_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
-    crk_id = _ensure_crk(payload.customer_id, payload.crk_id, corr_id)
+    crk_id = _ensure_crk(payload.customer_id, payload.crk_id, corr_id, session_id)
     with get_session() as session:
         _persist_audit(
             session,
@@ -253,11 +270,12 @@ def store_data(payload: StoreDataRequest, request: Request) -> StoreDataResponse
             corr_id=corr_id,
             customer_id=payload.customer_id,
             crk_id=crk_id,
+            session_id=session_id,
         )
         session.commit()
-    audit("data.dek.requested", corr_id=corr_id, customer_id=payload.customer_id, crk_id=crk_id)
-    dek_bytes, wrapped_dek = _generate_dek(payload.customer_id, crk_id, corr_id)
-    audit("data.dek.received", corr_id=corr_id, customer_id=payload.customer_id, crk_id=crk_id)
+    audit("data.dek.requested", corr_id=corr_id, customer_id=payload.customer_id, crk_id=crk_id, session_id=session_id)
+    dek_bytes, wrapped_dek = _generate_dek(payload.customer_id, crk_id, corr_id, session_id)
+    audit("data.dek.received", corr_id=corr_id, customer_id=payload.customer_id, crk_id=crk_id, session_id=session_id)
 
     ciphertext, nonce, tag = encrypt_data(payload.data.encode("utf-8"), dek_bytes)
 
@@ -270,10 +288,12 @@ def store_data(payload: StoreDataRequest, request: Request) -> StoreDataResponse
             customer_id=payload.customer_id,
             crk_id=crk_id,
             data_id=data_id,
+            session_id=session_id,
         )
         record = DataRecord(
             data_id=data_id,
             customer_id=payload.customer_id,
+            session_id=session_id,
             ciphertext=ciphertext,
             nonce=nonce,
             tag=tag,
@@ -287,22 +307,28 @@ def store_data(payload: StoreDataRequest, request: Request) -> StoreDataResponse
             customer_id=payload.customer_id,
             crk_id=crk_id,
             data_id=data_id,
+            session_id=session_id,
         )
         session.commit()
-    audit("data.store.encrypted", corr_id=corr_id, customer_id=payload.customer_id, crk_id=crk_id, data_id=data_id)
+    audit("data.store.encrypted", corr_id=corr_id, customer_id=payload.customer_id, crk_id=crk_id, data_id=data_id, session_id=session_id)
     return StoreDataResponse(data_id=data_id)
 
 
 @app.get("/data/{data_id}", response_model=RetrieveDataResponse)
 def retrieve_data(data_id: str, request: Request) -> RetrieveDataResponse:
     # Route: fetches record by data_id, unwraps DEK via KMS, AES-GCM decrypts ciphertext, returns plaintext response.
+    session_id = require_session_id(request)
     corr_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
     with get_session() as session:
-        record = session.get(DataRecord, data_id)
+        record = (
+            session.query(DataRecord)
+            .filter(DataRecord.data_id == data_id, DataRecord.session_id == session_id)
+            .first()
+        )
         if not record:
             raise HTTPException(status_code=404, detail="Data not found")
 
-        dek_bytes = _unwrap_dek(record.wrapped_dek, corr_id)
+        dek_bytes = _unwrap_dek(record.wrapped_dek, corr_id, session_id)
     try:
         plaintext = decrypt_data(record.ciphertext, record.nonce, record.tag, dek_bytes)
     except Exception:
@@ -316,6 +342,7 @@ def retrieve_data(data_id: str, request: Request) -> RetrieveDataResponse:
             customer_id=record.customer_id,
             crk_id=record.wrapped_dek.get("crk_id") if isinstance(record.wrapped_dek, dict) else None,
             data_id=record.data_id,
+            session_id=session_id,
         )
         session.commit()
     audit(
@@ -324,6 +351,7 @@ def retrieve_data(data_id: str, request: Request) -> RetrieveDataResponse:
         customer_id=record.customer_id,
         crk_id=record.wrapped_dek.get("crk_id") if isinstance(record.wrapped_dek, dict) else None,
         data_id=record.data_id,
+        session_id=session_id,
     )
     return RetrieveDataResponse(
         data_id=record.data_id, customer_id=record.customer_id, data=plaintext.decode("utf-8")
@@ -332,10 +360,13 @@ def retrieve_data(data_id: str, request: Request) -> RetrieveDataResponse:
 
 #! DEBUG ONLY: remove before production; dumps raw data store
 @app.get("/_debug/data")
-def debug_dump_data_store() -> dict:
+def debug_dump_data_store(request: Request) -> dict:
     # Route: returns raw data store for troubleshooting; not for production use.
+    session_id = require_session_id(request)
     with get_session() as session:
-        records = session.query(DataRecord).all()
+        records = session.query(DataRecord).filter(
+            or_(DataRecord.session_id == session_id, DataRecord.session_id.is_(None))
+        ).all()
         return {
             r.data_id: {
                 "data_id": r.data_id,
@@ -351,15 +382,24 @@ def debug_dump_data_store() -> dict:
 
 # DEBUG ONLY: recent audit logs
 @app.get("/_debug/logs")
-def debug_logs() -> List[Dict]:
-    return list(AuditLogBuffer)
+def debug_logs(request: Request) -> List[Dict]:
+    session_id = require_session_id(request)
+    return [entry for entry in AuditLogBuffer if entry.get("session_id") in (None, session_id)]
 
 
 # Public flush: resets data records and audit logs
 @app.post("/flush")
-def flush_playground() -> dict:
+def flush_playground(request: Request) -> dict:
+    session_id = require_session_id(request)
     AuditLogBuffer.clear()
     with get_session() as session:
-        session.execute(text("TRUNCATE data_records, audit_logs RESTART IDENTITY;"))
+        session.execute(
+            text("DELETE FROM data_records WHERE session_id = :sid OR session_id IS NULL"),
+            {"sid": session_id},
+        )
+        session.execute(
+            text("DELETE FROM audit_logs WHERE session_id = :sid OR session_id IS NULL"),
+            {"sid": session_id},
+        )
         session.commit()
     return {"status": "flushed"}
