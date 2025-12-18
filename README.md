@@ -1,6 +1,6 @@
 # KMS Playground
 
-This project demonstrates envelope encryption across a Key Management Service (KMS), a data service, and a UI to visualize the flow. The KMS issues and unwraps Data Encryption Keys (DEKs), while the data service encrypts/decrypts application data. Both services persist state in their dedicated Postgres instances and expose debug endpoints for UI visualisation and testing. For a deeper architectural overview, see `ARCHITECTURE_KMS101.md`.
+This project demonstrates envelope encryption across a Key Management Service (KMS), a data service, and a UI to visualize the flow. The KMS issues and unwraps Data Encryption Keys (DEKs), while the data service encrypts/decrypts application data. Both services persist state in their dedicated Postgres instances and expose debug endpoints for UI visualisation and testing. For a deeper architectural overview, see `ARCHITECTURE_KMS.md`.
 
 ## Services
 
