@@ -68,7 +68,7 @@ const App = () => {
     if (!sessionId) return;
     setResetStatus("");
     try {
-      const logs = await sessionFetch(`${kmsBaseUrl}/_debug/logs`).then((r) => r.json());
+      const logs = await sessionFetch(`${kmsBaseUrl}/audit/logs`).then((r) => r.json());
       setKmsLogs(logs);
     } catch {
       // ignore log fetch errors for UI
@@ -79,7 +79,7 @@ const App = () => {
     if (!sessionId) return;
     setResetStatus("");
     try {
-      const logs = await sessionFetch(`${dataBaseUrl}/_debug/logs`).then((r) => r.json());
+      const logs = await sessionFetch(`${dataBaseUrl}/audit/logs`).then((r) => r.json());
       setDataLogs(logs);
     } catch {
       // ignore log fetch errors for UI

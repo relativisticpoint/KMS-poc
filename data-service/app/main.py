@@ -41,7 +41,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Request
 from pydantic import BaseModel, Field
-from sqlalchemy import JSON, Column, String, create_engine, text, or_
+from sqlalchemy import JSON, Column, String, create_engine, text, or_, desc
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
 from pythonjsonlogger import jsonlogger
@@ -385,6 +385,34 @@ def debug_dump_data_store(request: Request) -> dict:
 def debug_logs(request: Request) -> List[Dict]:
     session_id = require_session_id(request)
     return [entry for entry in AuditLogBuffer if entry.get("session_id") in (None, session_id)]
+
+
+@app.get("/audit/logs")
+def audit_logs(request: Request, limit: int = 200) -> List[Dict]:
+    session_id = require_session_id(request)
+    with get_session() as session:
+        rows = (
+            session.query(AuditLog)
+            .filter(AuditLog.session_id == session_id)
+            .order_by(desc(AuditLog.ts))
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "id": r.id,
+                "ts": r.ts,
+                "level": r.level,
+                "event": r.event,
+                "corr_id": r.corr_id,
+                "customer_id": r.customer_id,
+                "crk_id": r.crk_id,
+                "data_id": r.data_id,
+                "session_id": r.session_id,
+                "detail": r.detail,
+            }
+            for r in rows
+        ]
 
 
 # Public flush: resets data records and audit logs
