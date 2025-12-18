@@ -10,6 +10,7 @@ This project demonstrates envelope encryption across a Key Management Service (K
 - Data Service Database (PostgreSQL): stores encrypted data records (ciphertext, nonce, tag, wrapped DEK).
 - UI (React/Vite): playground to exercise store/decrypt flows and view data/logs.
 - Nginx proxy: fronts the UI and proxies `/kms` and `/data` to the backend services; only port 80 is exposed externally.
+- Session isolation: every request carries `X-Playground-Id`, and all data/keys/logs are scoped to that session in Postgres. The UI auto-generates and reuses a session ID per browser.
 
 ## Run with Docker Compose
 From the project root:
@@ -32,8 +33,9 @@ Issue a POST request to the data service to encrypt and store data, then a GET r
 ```
 curl -X POST http://localhost/data/data \
   -H "Content-Type: application/json" \
+  -H "X-Playground-Id: <your-session-id>" \
   -d '{"customer_id": "cust-123", "data": "Hello KMS101"}'
-curl http://localhost/data/data/<data_id>
+curl -H "X-Playground-Id: <your-session-id>" http://localhost/data/data/<data_id>
 ```
 
 ## Utilities
@@ -43,6 +45,7 @@ To run the script, ensure services are up and execute:
 ./scripts/flush_db.sh
 ```
 - Runtime flush endpoints (public in the playground): `POST /data/flush` and `POST /kms/flush` via the proxy reset app data/keys and in-memory audit buffers without restarting containers.
+- Per-session audit logs: UI fetches from `/audit/logs` (scoped by `X-Playground-Id`); `_debug/logs` remains dev-only.
 
 ## Explore the architecture
-For design details, key hierarchy, planned APIs, and schema notes, see `ARCHITECTURE_KMS101.md`.
+For design details, key hierarchy, planned APIs, and schema notes, see `ARCHITECTURE_KMS.md`.

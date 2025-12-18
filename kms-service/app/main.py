@@ -17,10 +17,14 @@ Responsibilities:
 The KMS service does NOT store or touch application data; it only handles
 key material and cryptographic operations.
 
-Planned endpoints:
+Endpoints:
 - POST /v1/customers/{customer_id}/root-keys : create/rotate CRKs
 - POST /v1/deks:generate                    : generate and wrap DEKs
 - POST /v1/deks:unwrap                      : unwrap DEKs for decryption
+
+Session handling:
+- Every request must include `X-Playground-Id`; CRKs and audit logs are
+  scoped by session_id so each user playground is isolated.
 """
 
 import base64

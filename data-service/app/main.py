@@ -22,6 +22,8 @@ only DEKs and wrapped DEKs.
 Environment:
 - KMS_BASE_URL: base URL of the KMS service inside the docker-compose
   network (e.g., http://kms-service:8000).
+- Every request must include `X-Playground-Id`; data, wrapped DEKs, and
+  audit logs are scoped to a session_id so each user playground is isolated.
 """
 
 import base64
