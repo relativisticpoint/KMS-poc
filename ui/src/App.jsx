@@ -5,6 +5,7 @@ const apiDefaults = {
   dataBaseUrl: "/data",
   kmsBaseUrl: "/kms",
 };
+const SESSION_HEADER = "X-Playground-Id";
 
 const App = () => {
   const [customerId, setCustomerId] = useState("cust-123");
@@ -26,13 +27,27 @@ const App = () => {
   const [decryptStatus, setDecryptStatus] = useState("");
   const [resetStatus, setResetStatus] = useState("");
   const [resetting, setResetting] = useState(false);
+  const [sessionId, setSessionId] = useState("");
+
+  useEffect(() => {
+    const existing = window.localStorage.getItem("kmsPlaygroundSession");
+    const sid = existing || (crypto?.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+    window.localStorage.setItem("kmsPlaygroundSession", sid);
+    setSessionId(sid);
+  }, []);
+
+  const sessionFetch = (url, options = {}) => {
+    const headers = { ...(options.headers || {}), [SESSION_HEADER]: sessionId };
+    return fetch(url, { ...options, headers });
+  };
 
   const fetchStores = async () => {
+    if (!sessionId) return;
     setResetStatus("");
     try {
       const [dataRes, crkRes] = await Promise.all([
-        fetch(`${dataBaseUrl}/_debug/data`).then((r) => r.json()),
-        fetch(`${kmsBaseUrl}/_debug/crks`).then((r) => r.json()),
+        sessionFetch(`${dataBaseUrl}/_debug/data`).then((r) => r.json()),
+        sessionFetch(`${kmsBaseUrl}/_debug/crks`).then((r) => r.json()),
       ]);
       setDataStore(dataRes);
       setCrkStore(crkRes);
@@ -42,14 +57,18 @@ const App = () => {
   };
 
   useEffect(() => {
+    if (!sessionId) return;
     fetchStores();
+    fetchKmsLogs();
+    fetchDataLogs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sessionId]);
 
   const fetchKmsLogs = async () => {
+    if (!sessionId) return;
     setResetStatus("");
     try {
-      const logs = await fetch(`${kmsBaseUrl}/_debug/logs`).then((r) => r.json());
+      const logs = await sessionFetch(`${kmsBaseUrl}/audit/logs`).then((r) => r.json());
       setKmsLogs(logs);
     } catch {
       // ignore log fetch errors for UI
@@ -57,9 +76,10 @@ const App = () => {
   };
 
   const fetchDataLogs = async () => {
+    if (!sessionId) return;
     setResetStatus("");
     try {
-      const logs = await fetch(`${dataBaseUrl}/_debug/logs`).then((r) => r.json());
+      const logs = await sessionFetch(`${dataBaseUrl}/audit/logs`).then((r) => r.json());
       setDataLogs(logs);
     } catch {
       // ignore log fetch errors for UI
@@ -73,14 +93,15 @@ const App = () => {
     const id2 = setInterval(fetchDataLogs, 8000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kmsBaseUrl, dataBaseUrl]);
+  }, [kmsBaseUrl, dataBaseUrl, sessionId]);
 
   const handleEncrypt = async () => {
+    if (!sessionId) return;
     setResetStatus("");
     setDecryptStatus("");
     setLoading(true);
     try {
-      const resp = await fetch(`${dataBaseUrl}/data`, {
+      const resp = await sessionFetch(`${dataBaseUrl}/data`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -110,6 +131,7 @@ const App = () => {
   };
 
   const handleDecrypt = async () => {
+    if (!sessionId) return;
     setResetStatus("");
     const targetId = decryptId || latestId;
     if (!targetId) {
@@ -119,7 +141,7 @@ const App = () => {
     setDecryptStatus("Decrypting...");
     setLoading(true);
     try {
-      const resp = await fetch(`${dataBaseUrl}/data/${targetId}`);
+      const resp = await sessionFetch(`${dataBaseUrl}/data/${targetId}`);
       const body = await resp.json();
       if (!resp.ok) {
         throw new Error(body.detail || `Fetch failed: ${resp.status}`);
@@ -137,12 +159,13 @@ const App = () => {
   };
 
   const handleReset = async () => {
+    if (!sessionId) return;
     setResetting(true);
     setResetStatus("");
     try {
       await Promise.all([
-        fetch(`${dataBaseUrl}/flush`, { method: "POST" }),
-        fetch(`${kmsBaseUrl}/flush`, { method: "POST" }),
+        sessionFetch(`${dataBaseUrl}/flush`, { method: "POST" }),
+        sessionFetch(`${kmsBaseUrl}/flush`, { method: "POST" }),
       ]);
       setLatestId("");
       setDecryptId("");

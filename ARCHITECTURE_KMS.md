@@ -13,10 +13,11 @@ Current implementation status:
 - Services run behind an nginx proxy; only port 80 is exposed. UI is served via nginx; backend ports are internal.
 - Observability: structured JSON logs with correlation IDs; recent events exposed via `/ _debug/logs` (dev only) and persisted audit tables in both DBs.
 - Reset hooks: both services expose `POST /kms/flush` and `POST /data/flush` (via the proxy) to wipe records/audit logs for a clean playground session.
+- Session isolation: all data/CRKs/audit logs are scoped by `session_id` (header `X-Playground-Id`). UI issues one per browser; queries, debug views, and flushes are per-session in Postgres.
 
 ## Big Picture
 
-There are 3 main services:
+There are 6 main services:
 
 1. **KMS Service (FastAPI, internal)**
    - Manages key material and performs cryptographic operations.
@@ -37,11 +38,25 @@ There are 3 main services:
      - Encrypts data locally with that DEK using AES-GCM.
      - Stores ciphertext + wrapped DEK + metadata in Postgres (database service).
 
-3. **Database (PostgreSQL, internal)**
-   - Stores:
-     - Encrypted data records (ciphertext, nonce, tag, etc.)
-     - Wrapped DEKs and key metadata
-   - KMS uses its own Postgres instance to store CRK metadata and wrapped CRKs.
+3. **Database x2 (PostgreSQL, internal)**
+  - One Postgres instance per service:
+    - Data service database: `data-service-db`
+      - Stores:
+         - Customer Root Keys (CRKs) encrypted under MK
+         - Wrapped DEKs
+         - Encrypted data records (ciphertext, nonce, tag, etc.)
+    - KMS database: `kms-db`
+      - Stores:
+         - Customer Root Keys (CRKs) encrypted under Master Key (MK)
+4. **UI (React/Vite, external)**
+   - A simple web UI served via nginx.
+   - Allows users to:
+     - Generate a session ID (X-Playground-Id) per browser.
+     - Exercise the data service endpoints to store/retrieve data.
+     - View logs and audit trails scoped to their session.
+5. **Nginx Proxy (internal/external)**
+   - Fronts the UI and proxies `/kms` and `/data` to the respective backend services.
+   - Only port 80 is exposed externally.
 
 ### Database schemas
 - `data-service-db` (`kms_poc_data`):
@@ -51,7 +66,7 @@ There are 3 main services:
 
 Communication:
 
-- `data-service` ⇄ `kms-service` over HTTP inside docker-compose network
+- `data-service` ⇄ `kms-service` over HTTP inside docker-compose internal network
 - `data-service` + `kms-service` ⇄ `db` over TCP
 
 ## Key Hierarchy / Cryptographic Design
@@ -167,6 +182,9 @@ In `data-service`, we plan endpoints like:
    - Structured JSON logs with correlation IDs.
    - Recent events exposed via `/ _debug/logs` (dev only) and persisted audit tables in both DBs.
 
-4. **Next Steps (to be done):**
+5. **Session isolation (done):**
+   - All data/CRKs/audit logs are scoped by `session_id` (header `X-Playground-Id`). UI issues one per user browser; queries, debug views, and flushes are per-session in Postgres.
+
+6. **Next Steps (to be done):**
    - Key rotation logic.
    - Basic auth/mTLS for KMS calls.
